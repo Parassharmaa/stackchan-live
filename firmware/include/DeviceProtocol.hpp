@@ -11,6 +11,7 @@ constexpr size_t kImageRequestIdSize = 32;
 enum class AudioStream : uint8_t {
   microphone = 1,
   speaker = 2,
+  physical_render = 3,
 };
 
 enum AudioFlags : uint16_t {

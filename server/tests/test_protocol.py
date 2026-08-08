@@ -21,6 +21,17 @@ def test_audio_frame_round_trip() -> None:
     assert AudioFrame.decode(original.encode()) == original
 
 
+def test_physical_render_reference_round_trip() -> None:
+    original = AudioFrame(
+        stream=AudioStream.PHYSICAL_RENDER,
+        sequence=7,
+        timestamp_ms=9,
+        pcm=b"\x01\x00" * 320,
+    )
+
+    assert AudioFrame.decode(original.encode()) == original
+
+
 def test_audio_frame_rejects_odd_pcm() -> None:
     encoded = AudioFrame(
         stream=AudioStream.MICROPHONE,

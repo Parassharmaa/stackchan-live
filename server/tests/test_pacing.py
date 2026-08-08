@@ -25,6 +25,7 @@ from stackchan_agent.app import (
     ordinary_capture_allows_speech_start,
     pairing_proof,
     pairing_response_matches,
+    preliminary_cue_has_independent_support,
     rebase_pacing_after_gap,
     retain_recent_pcm16,
     retain_semantic_window_and_suffix,
@@ -35,6 +36,7 @@ from stackchan_agent.app import (
     should_open_acoustic_listening_window,
     tool_result_is_terminal,
 )
+from stackchan_agent.config import Settings
 from stackchan_agent.local_providers import WhisperTranscription
 
 
@@ -82,6 +84,40 @@ def test_pending_turn_rejects_background_capture_until_playback_barge_lane() -> 
 
 def test_bilingual_barge_probe_keeps_cross_language_japanese_cue_together() -> None:
     assert barge_probe_interval_ms("ja", english_ms=420, japanese_ms=700) == 700
+
+
+def test_initial_barge_probe_outlasts_the_playback_reaction_delay() -> None:
+    settings = Settings(provider="mock")
+
+    assert settings.barge_in_preroll_ms >= 1200
+    assert settings.barge_in_initial_probe_ms == 1100
+    assert settings.barge_in_initial_probe_ms > settings.barge_in_probe_ja_ms
+    assert settings.barge_in_probe_window_ms >= (
+        settings.barge_in_preroll_ms + settings.barge_in_initial_probe_ms
+    )
+    assert settings.barge_in_confirmation_timeout_ms >= 6000
+
+
+def test_physical_render_reference_uses_stricter_double_talk_onset() -> None:
+    settings = Settings(provider="mock")
+
+    assert settings.barge_in_physical_min_clean_ratio > settings.barge_in_min_clean_ratio
+    assert settings.barge_in_physical_min_clean_rms > settings.barge_in_min_rms
+    assert (
+        settings.barge_in_physical_max_render_correlation
+        < settings.barge_in_max_render_correlation
+    )
+
+
+def test_raw_control_cue_can_corroborate_cross_language_clean_cue() -> None:
+    assert preliminary_cue_has_independent_support(
+        raw_control_cue_supported=True,
+        cross_language_acoustic_supported=False,
+    )
+    assert not preliminary_cue_has_independent_support(
+        raw_control_cue_supported=False,
+        cross_language_acoustic_supported=False,
+    )
 
 
 def test_duck_handoff_retains_only_recent_complete_pcm16_samples() -> None:

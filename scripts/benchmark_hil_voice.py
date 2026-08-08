@@ -22,7 +22,7 @@ CASES = {
         "prompt_gain": 1.0,
         # Avoid a wake-name comma: macOS voices can pause there longer than the
         # device endpoint, turning one benchmark prompt into two speech turns.
-        "prompt": "Count slowly from one to ten.",
+        "prompt": "Count slowly from one to ten, saying every number in one response.",
         "interrupt": "Stop talking. I need a short joke instead.",
         "interrupt_parts": ("Stop talking.", "I need a short joke instead."),
         # The runner waits for the correlated firmware duck acknowledgement;
@@ -34,7 +34,7 @@ CASES = {
     "ja": {
         "voice": "Kyoko",
         "prompt_gain": 1.0,
-        "prompt": "1から10までゆっくり数えてください。",
+        "prompt": "1から10まで、全部の数字を一回の返事でゆっくり数えてください。",
         "interrupt": "待ってください。ジョークを言って。",
         "interrupt_parts": ("待ってください。", "ジョークを言って。"),
         "interrupt_pause_s": 0.06,

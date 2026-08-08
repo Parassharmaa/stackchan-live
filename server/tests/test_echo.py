@@ -1,3 +1,4 @@
+import time
 from array import array
 
 from stackchan_agent.echo import EchoCanceller
@@ -55,6 +56,16 @@ def test_end_render_preserves_adapted_processor() -> None:
     assert not echo.render_recent
 
 
+def test_physical_reference_can_rebuild_aec_at_zero_delay() -> None:
+    echo = EchoCanceller(delay_ms=160)
+    old_processor = echo._processor
+
+    echo.set_delay_ms(0)
+
+    assert echo.delay_ms == 0
+    assert echo._processor is not old_processor
+
+
 def test_capture_bypasses_aec_without_a_recent_render_reference() -> None:
     echo = EchoCanceller(delay_ms=160)
     pcm = bytes(range(128)) * 5
@@ -86,6 +97,16 @@ def test_render_reference_gain_matches_physical_ducking() -> None:
     assert set(reference) == {400}
 
 
+def test_physical_render_reference_is_consumed_without_resampling() -> None:
+    echo = EchoCanceller(delay_ms=0)
+    reference = array("h", range(320)).tobytes()
+
+    echo.feed_physical_render_16k(reference)
+
+    assert list(echo._render_history)[-2:] == [reference[:320], reference[320:]]
+    assert echo.render_recent
+
+
 def test_aligned_render_projection_removes_scalar_echo() -> None:
     echo = EchoCanceller(delay_ms=0)
     render_samples = array("h", (index * 80 - 6_000 for index in range(240)))
@@ -95,6 +116,23 @@ def test_aligned_render_projection_removes_scalar_echo() -> None:
     capture_samples.frombytes(capture_reference)
     capture = array("h", (sample // 2 for sample in capture_samples)).tobytes()
     echo.feed_render_24k(render)
+
+    projected = echo.remove_aligned_render(capture)
+
+    assert EchoCanceller._rms(projected) < EchoCanceller._rms(capture) * 0.02
+
+
+def test_aligned_projection_searches_beyond_four_hundred_ms_of_device_lead() -> None:
+    echo = EchoCanceller(delay_ms=0)
+    target = array("h", [0] * 160)
+    target[7] = 12_000
+    echo._render_history.append(target.tobytes())
+    for index in range(60):
+        distractor = array("h", [0] * 160)
+        distractor[40 + index] = 8_000
+        echo._render_history.append(distractor.tobytes())
+    capture = array("h", (sample // 2 for sample in target)).tobytes()
+    echo._last_render_ns = time.perf_counter_ns()
 
     projected = echo.remove_aligned_render(capture)
 

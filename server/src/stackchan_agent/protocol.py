@@ -14,6 +14,7 @@ _IMAGE_HEADER = struct.Struct("<4sBBHH32s")
 class AudioStream(IntEnum):
     MICROPHONE = 1
     SPEAKER = 2
+    PHYSICAL_RENDER = 3
 
 
 class AudioFlags(IntFlag):

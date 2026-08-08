@@ -672,6 +672,13 @@ def semantic_cue_can_open_listening_window(
     return clean_cue_supported and raw_control_cue_supported
 
 
+def preliminary_cue_has_independent_support(
+    *, raw_control_cue_supported: bool, cross_language_acoustic_supported: bool
+) -> bool:
+    """Accept either raw semantics or the conservative cross-language level gate."""
+    return raw_control_cue_supported or cross_language_acoustic_supported
+
+
 def independent_same_language_cue_confirmed(
     probes: list[tuple[str, WhisperTranscription]],
     *,
@@ -1225,6 +1232,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         playback_tail_seconds = settings.playback_tail_guard_ms / 1_000
         device_playback_active = False
         device_playback_ended_at = 0.0
+        physical_render_reference = False
         send_lock = asyncio.Lock()
         pending_tool_results: dict[str, asyncio.Future[dict]] = {}
         active_motion_request_ids: set[str] = set()
@@ -1272,10 +1280,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # Keep the AEC render level synchronized with physical playback.
             # Candidates remain at unity until semantic verification succeeds,
             # so self-echo cannot repeatedly modulate Stack-chan's voice.
-            echo.feed_render_24k(
-                pcm,
-                gain=settings.barge_in_duck_gain if playback_ducked else 1.0,
-            )
+            if not physical_render_reference:
+                echo.feed_render_24k(
+                    pcm,
+                    gain=settings.barge_in_duck_gain if playback_ducked else 1.0,
+                )
 
         def is_speaking() -> bool:
             return asyncio.get_running_loop().time() < playback_until
@@ -1417,6 +1426,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 clean_rms=round(echo.clean_rms, 2),
                 clean_ratio=round(clean_ratio, 4),
                 render_correlation=round(echo.capture_render_correlation, 4),
+                render_lag_ms=echo.capture_render_lag_ms,
+                applied_aec_delay_ms=echo.applied_delay_ms,
                 playback_affected=open_listening_window,
             )
             if open_listening_window:
@@ -1793,10 +1804,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 preliminary_clean_cue is not None
                 and voice_barge_candidate_render_correlation
                 <= settings.barge_in_explicit_max_render_correlation
-                and cross_language_barge_has_acoustic_support(
-                    preliminary_clean_cue[0] != preferred_language,
-                    voice_barge_candidate_raw_rms,
-                    settings.barge_in_cross_language_min_raw_rms,
+                and preliminary_cue_has_independent_support(
+                    raw_control_cue_supported=raw_control_cue_support,
+                    cross_language_acoustic_supported=(
+                        cross_language_barge_has_acoustic_support(
+                            preliminary_clean_cue[0] != preferred_language,
+                            voice_barge_candidate_raw_rms,
+                            settings.barge_in_cross_language_min_raw_rms,
+                        )
+                    ),
                 )
             )
             voice_barge_last_probe_cued = semantic_cue_can_open_listening_window(
@@ -2503,6 +2519,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             )
                         continue
                     frame = AudioFrame.decode(binary)
+                    if frame.stream == AudioStream.PHYSICAL_RENDER:
+                        if not physical_render_reference:
+                            await send_text(
+                                control(
+                                    "error", code="unexpected_render_reference"
+                                ).encode()
+                            )
+                            continue
+                        echo.feed_physical_render_16k(frame.pcm)
+                        continue
                     if frame.stream != AudioStream.MICROPHONE:
                         error = control("error", code="wrong_audio_stream")
                         await send_text(error.encode())
@@ -2610,7 +2636,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 elapsed_ms = (
                                     time.perf_counter_ns() - voice_barge_started_ns
                                 ) / 1_000_000
-                                next_probe_ms = probe_interval_ms * (voice_barge_probe_attempts + 1)
+                                next_probe_ms = settings.barge_in_initial_probe_ms * (
+                                    voice_barge_probe_attempts + 1
+                                )
                             if voice_barge_verification_task is not None:
                                 if not voice_barge_verification_task.done():
                                     continue
@@ -2774,11 +2802,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 minimum_clean_rms=max(
                                     settings.barge_in_min_rms,
                                     settings.motion_vad_start_rms if motion_guarded else 0,
+                                    (
+                                        settings.barge_in_physical_min_clean_rms
+                                        if physical_render_reference
+                                        else 0
+                                    ),
                                 ),
-                                minimum_clean_ratio=settings.barge_in_min_clean_ratio,
+                                minimum_clean_ratio=(
+                                    max(
+                                        settings.barge_in_min_clean_ratio,
+                                        settings.barge_in_physical_min_clean_ratio,
+                                    )
+                                    if physical_render_reference
+                                    else settings.barge_in_min_clean_ratio
+                                ),
                                 maximum_clean_ratio=settings.barge_in_max_clean_ratio,
                                 maximum_render_correlation=(
-                                    settings.barge_in_max_render_correlation
+                                    min(
+                                        settings.barge_in_max_render_correlation,
+                                        settings.barge_in_physical_max_render_correlation,
+                                    )
+                                    if physical_render_reference
+                                    else settings.barge_in_max_render_correlation
                                 ),
                             )
                             confident_speech = (
@@ -2858,6 +2903,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if sensor_llm is not None:
                         await sensor_llm.bind_device(device_id)
                     authenticated = True
+                    physical_render_reference = bool(
+                        command.payload.get("physical_render_reference", False)
+                    )
+                    if physical_render_reference:
+                        # Discard any estimated render state from before the
+                        # authenticated capability handshake. Reverse frames
+                        # now arrive beside the captured microphone frame, so
+                        # the legacy queue-delay compensation must be disabled.
+                        echo.set_delay_ms(0)
                     pipeline.memory_enabled = not bool(command.payload.get("test_session", False))
                     public_info = dict(command.payload)
                     public_info.pop("auth_response", None)

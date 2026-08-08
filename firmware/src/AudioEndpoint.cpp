@@ -228,19 +228,46 @@ void AudioEndpoint::captureDuplexFrame() {
       I2S_NUM_1, duplex_input_, sizeof(duplex_input_), &bytes_read, 0);
   if (error != ESP_OK || bytes_read != sizeof(duplex_input_)) return;
 
+  const uint32_t captured_at_ms = millis();
+  if (playback_active_) {
+    // Send the exact post-duck samples most recently written to the physical
+    // I2S speaker. The laptop can now align AEC to device playback instead of
+    // estimating it from audio queued up to 800 ms earlier over WebSocket.
+    for (size_t output = 0; output < kSamplesPerFrame; ++output) {
+      const size_t base = (output * 3) / 2;
+      int32_t sample = duplex_output_[base * 2];
+      if (output & 1U) {
+        const size_t next = min(base + 1, kDuplexFramesPerPacket - 1);
+        sample = (sample + duplex_output_[next * 2]) / 2;
+      }
+      render_reference_[output] = static_cast<int16_t>(sample);
+    }
+    const size_t reference_length = encodeAudioFrame(
+        render_reference_encoded_, sizeof(render_reference_encoded_),
+        AudioStream::physical_render, audio_none, render_reference_sequence_++,
+        captured_at_ms, render_reference_, kSamplesPerFrame);
+    if (reference_length) {
+      socket_.sendBIN(render_reference_encoded_, reference_length);
+    }
+  }
+
   // 24 kHz stereo -> 16 kHz mono. ES7210 exposes the two physical microphones
   // as the left/right slots; average them, then linearly sample at the 2:3
   // output/input ratio. Idle speech retains the board support's 2x
-  // magnification. During playback the codec PGA is reduced by 6 dB before the
-  // ADC rather than lowering this already-digitized signal. A separately
-  // validated preliminary cue may also duck speaker playback by 26 dB. Together
-  // they prevent double-talk saturation while preserving the near-end level
-  // reaching VAD.
-  const int32_t capture_gain = 2;
+  // magnification. During playback the raw speaker echo can still clip after
+  // that digital gain even with the codec PGA reduced by 6 dB; keep unity gain
+  // so the laptop receives a linear signal that AEC can actually cancel.
+  const int32_t capture_gain = playback_active_ ? 1 : 2;
   microphone_gain_x100_ = static_cast<int>(capture_gain * 100);
   microphone_clipped_samples_ = 0;
+  uint64_t left_square_sum = 0;
+  uint64_t right_square_sum = 0;
   for (size_t output = 0; output < kSamplesPerFrame; ++output) {
     const size_t base = (output * 3) / 2;
+    left_square_sum += static_cast<int64_t>(duplex_input_[base * 2]) *
+                       duplex_input_[base * 2];
+    right_square_sum += static_cast<int64_t>(duplex_input_[base * 2 + 1]) *
+                        duplex_input_[base * 2 + 1];
     const int32_t first =
         (static_cast<int32_t>(duplex_input_[base * 2]) +
          static_cast<int32_t>(duplex_input_[base * 2 + 1])) /
@@ -260,6 +287,10 @@ void AudioEndpoint::captureDuplexFrame() {
     }
     microphone_[output] = saturate(amplified);
   }
+  microphone_left_rms_ = sqrtf(
+      static_cast<float>(left_square_sum) / static_cast<float>(kSamplesPerFrame));
+  microphone_right_rms_ = sqrtf(
+      static_cast<float>(right_square_sum) / static_cast<float>(kSamplesPerFrame));
   uint64_t square_sum = 0;
   microphone_peak_ = 0;
   for (const int16_t sample : microphone_) {
@@ -271,7 +302,7 @@ void AudioEndpoint::captureDuplexFrame() {
       static_cast<float>(square_sum) / static_cast<float>(kSamplesPerFrame));
   const size_t length = encodeAudioFrame(
       encoded_, sizeof(encoded_), AudioStream::microphone,
-      sequence_ == 0 ? audio_start : audio_none, sequence_++, millis(),
+      sequence_ == 0 ? audio_start : audio_none, sequence_++, captured_at_ms,
       microphone_, kSamplesPerFrame);
   if (length) socket_.sendBIN(encoded_, length);
 }

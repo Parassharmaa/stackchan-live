@@ -74,18 +74,25 @@ class Settings(BaseSettings):
     # Once a cue is semantically corroborated, make room for the replacement
     # request. The firmware ramps to this gain over one 20 ms output frame.
     barge_in_duck_gain: float = Field(default=0.05, ge=0.0, le=1.0)
-    # Retain the control-word onset without allowing the robot's preceding
-    # render to dominate the first short semantic probe. The detector itself
-    # needs only 80 ms, so 200 ms leaves comfortable pre-trigger context.
-    barge_in_preroll_ms: int = 200
+    # Far-field speech can cross the near-end gate near the end of a short
+    # control phrase while Stack-chan is loud. Retain enough pre-trigger audio
+    # to preserve the initial Stop/Wait word; semantic render-echo rejection,
+    # rather than this acoustic buffer, still authorizes any duck or flush.
+    barge_in_preroll_ms: int = 1200
+    # The hidden candidate can begin on the robot's first loud frame, while a
+    # person naturally starts speaking only after hearing playback. Keep the
+    # initial un-ducked probe open long enough to include a complete short
+    # Stop/Wait cue instead of decoding only its trailing consonants.
+    barge_in_initial_probe_ms: int = 1100
     barge_in_probe_ms: int = 420
     # Japanese control phrases take longer to articulate than Stop/Wait. The
     # bilingual first probe uses this 700 ms window even during an English reply
     # so a cross-language 待ってください cue is not split at 420 ms.
     barge_in_probe_ja_ms: int = 700
-    # Decode the recent candidate tail rather than letting earlier robot echo
-    # dominate every retry as a real interruption accumulates.
-    barge_in_probe_window_ms: int = 1600
+    # The initial probe combines the pre-roll above with the post-trigger
+    # capture. A 2.6 s cap preserves a complete far-field control phrase while
+    # remaining short enough for the local bilingual Whisper verifier.
+    barge_in_probe_window_ms: int = 2600
     # The raw lane is consulted only after an explicit Stop/Wait cue. Keep the
     # full short replacement utterance because a 1.6 s rolling window could
     # reduce "I need a short joke instead" to the non-actionable "I need" by
@@ -96,9 +103,9 @@ class Settings(BaseSettings):
     # is flushed.
     barge_in_probe_attempts: int = 4
     # The bilingual forced-language probes can contend for the same local model
-    # and take just over one second on this Mac. This deadline applies only
-    # after a candidate exists; uncued echo is still rejected after probe one.
-    barge_in_confirmation_timeout_ms: int = 4500
+    # and take just over one second on this Mac. The deadline includes the
+    # longer initial cue window plus one cue-anchored continuation decode.
+    barge_in_confirmation_timeout_ms: int = 6000
     # Preserve a natural pause after "Stop" / "ストップ" before the replacement
     # request. Normal non-barge turns retain the faster 560 ms endpoint.
     barge_in_silence_ms: int = 900
@@ -106,6 +113,14 @@ class Settings(BaseSettings):
     barge_in_min_clean_ratio: float = 0.12
     barge_in_max_clean_ratio: float = 1.25
     barge_in_max_render_correlation: float = 0.92
+    # With a post-gain physical render reference, echo-only frames are measured
+    # much more accurately: failed hardware candidates stayed below a 0.44
+    # clean/raw ratio while the confirmed English interruption reached 0.59.
+    # Use that stronger evidence to keep echo from occupying the semantic
+    # verifier exactly when a person begins speaking.
+    barge_in_physical_min_clean_ratio: float = 0.50
+    barge_in_physical_max_render_correlation: float = 0.65
+    barge_in_physical_min_clean_rms: int = 1200
     barge_in_natural_max_render_correlation: float = 0.35
     barge_in_confidence_threshold: float = -0.60
     # Once a stable Stop/Wait cue has opened the bounded listening window, the

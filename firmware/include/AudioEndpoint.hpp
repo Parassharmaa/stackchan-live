@@ -22,6 +22,8 @@ class AudioEndpoint {
   bool duplexReady() const { return duplex_ready_; }
   float playbackEnergy() const { return playback_energy_; }
   float microphoneRms() const { return microphone_rms_; }
+  float microphoneLeftRms() const { return microphone_left_rms_; }
+  float microphoneRightRms() const { return microphone_right_rms_; }
   int microphonePeak() const { return microphone_peak_; }
   size_t microphoneClippedSamples() const {
     return microphone_clipped_samples_;
@@ -67,6 +69,8 @@ class AudioEndpoint {
   WebSocketsClient& socket_;
   int16_t microphone_[kSamplesPerFrame]{};
   uint8_t encoded_[sizeof(AudioHeader) + sizeof(microphone_)]{};
+  int16_t render_reference_[kSamplesPerFrame]{};
+  uint8_t render_reference_encoded_[sizeof(AudioHeader) + sizeof(render_reference_)]{};
   int16_t duplex_input_[kDuplexFramesPerPacket * 2]{};
   int16_t duplex_output_[kDuplexFramesPerPacket * 2]{};
   int16_t playback_queue_[kPlaybackQueueDepth][kOutputSamplesPerFrame]{};
@@ -83,6 +87,7 @@ class AudioEndpoint {
   bool playback_starvation_latched_ = false;
   uint32_t last_playback_write_ms_ = 0;
   uint32_t sequence_ = 0;
+  uint32_t render_reference_sequence_ = 0;
   bool connected_ = false;
   bool playback_active_ = false;
   bool playback_ducked_ = false;
@@ -92,6 +97,8 @@ class AudioEndpoint {
   bool duplex_ready_ = false;
   float playback_energy_ = 0.0f;
   float microphone_rms_ = 0.0f;
+  float microphone_left_rms_ = 0.0f;
+  float microphone_right_rms_ = 0.0f;
   int microphone_peak_ = 0;
   size_t microphone_clipped_samples_ = 0;
   int microphone_gain_x100_ = 200;

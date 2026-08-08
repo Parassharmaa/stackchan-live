@@ -737,3 +737,23 @@ Japanese crying. Every supported emotion returned a correlated terminal device
 success and remained held after its spoken response. Both crying requests
 selected the new tear sprite rather than the sad fallback; all five replies
 started and drained with zero playback drops or starvation.
+
+## Boot-47 physical render-reference interruption work (2026-08-08)
+
+Firmware now sends a 16 kHz post-gain physical render reference beside each
+same-timestamp microphone frame while full-duplex playback is active. The server
+uses that lane at zero configured delay and falls back to its prior outgoing-TTS
+estimate for older firmware. Playback capture uses unity digital gain while the
+idle microphone retains 2x gain; the final speaker-only bilingual run measured
+zero clipped samples, false ducks, false barges, dropped frames, and starvation.
+
+One isolated English physical run passed on the first control cue: raw Whisper
+decoded `Stop talking`, the bounded listening window captured
+`I need a short joke instead`, the correlated physical flush completed in
+8.289 ms, and the replacement response played without a transport fault.
+However, the next complete English/Japanese run failed both interruption cases:
+the prompts and later cue-only turns were recognized, but the cues remained
+masked during active playback and no duck or flush was authorized. This is not
+repeatable acceptance evidence. The current status remains an open far-field
+acoustic gate, with the positive run retained only as evidence that the new
+physical-reference path can complete the protocol safely.

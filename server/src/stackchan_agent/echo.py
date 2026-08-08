@@ -25,6 +25,7 @@ class EchoCanceller:
         self.clean_rms = 0.0
         self.capture_render_correlation = 0.0
         self.capture_render_lag_ms = 0
+        self.applied_delay_ms = delay_ms
 
     def _new_processor(self) -> AudioProcessor:
         self._processor = AudioProcessor(
@@ -47,6 +48,17 @@ class EchoCanceller:
         self.clean_rms = 0.0
         self.capture_render_correlation = 0.0
         self.capture_render_lag_ms = 0
+        self.applied_delay_ms = self.delay_ms
+
+    def set_delay_ms(self, delay_ms: int) -> None:
+        """Rebuild AEC when switching between estimated and physical render."""
+        if delay_ms < 0:
+            raise ValueError("AEC delay must not be negative")
+        if delay_ms == self.delay_ms:
+            self.reset()
+            return
+        self.delay_ms = delay_ms
+        self.reset()
 
     def end_render(self) -> None:
         """Mark playback stopped while preserving the adapted echo filter."""
@@ -145,6 +157,19 @@ class EchoCanceller:
             self._render_history.append(frame)
             self._processor.process_reverse_stream(frame)
 
+    def feed_physical_render_16k(self, pcm: bytes) -> None:
+        """Feed the post-gain render captured beside the device microphone."""
+        if not self.enabled:
+            return
+        if len(pcm) % 2:
+            raise ValueError("PCM16 payload must contain complete samples")
+        self._last_render_ns = time.perf_counter_ns()
+        complete_bytes = len(pcm) - len(pcm) % self.frame_bytes
+        for offset in range(0, complete_bytes, self.frame_bytes):
+            frame = pcm[offset : offset + self.frame_bytes]
+            self._render_history.append(frame)
+            self._processor.process_reverse_stream(frame)
+
     def process_capture_16k(self, pcm: bytes) -> bytes:
         if not self.enabled:
             return pcm
@@ -159,19 +184,22 @@ class EchoCanceller:
         complete_bytes = len(pcm) - len(pcm) % self.frame_bytes
         for offset in range(0, complete_bytes, self.frame_bytes):
             frame = pcm[offset : offset + self.frame_bytes]
-            # Server pacing, the device lead buffer, I2S DMA, and acoustic
-            # propagation move the effective lag. Search a bounded 400 ms
-            # history rather than trusting one nominal delay sample.
+            # Server pacing keeps up to 800 ms of audio queued ahead of the
+            # physical speaker. Search the bounded one-second render history so
+            # the frame currently leaving the device is not excluded merely
+            # because it was sent more than 400 ms ago.
             if self._render_history:
-                history = tuple(self._render_history)[-40:]
+                history = tuple(self._render_history)
                 frame_correlations = [
                     self._correlation(frame, reference) for reference in history
                 ]
                 best_index = max(
                     range(len(frame_correlations)), key=frame_correlations.__getitem__
                 )
-                correlations.append(frame_correlations[best_index])
-                lags_ms.append((len(history) - 1 - best_index) * 10)
+                best_correlation = frame_correlations[best_index]
+                best_lag_ms = (len(history) - 1 - best_index) * 10
+                correlations.append(best_correlation)
+                lags_ms.append(best_lag_ms)
             clean.extend(self._processor.process_stream(frame))
             self.frames_processed += 1
         clean.extend(pcm[complete_bytes:])
@@ -195,7 +223,10 @@ class EchoCanceller:
             return pcm
         output = bytearray()
         complete_bytes = len(pcm) - len(pcm) % self.frame_bytes
-        history = tuple(self._render_history)[-40:]
+        # The server deliberately leads the physical device by as much as
+        # 800 ms. The deque is capped at one second, which is both sufficient
+        # for that queue and bounded for this per-frame projection search.
+        history = tuple(self._render_history)
         for offset in range(0, complete_bytes, self.frame_bytes):
             frame = pcm[offset : offset + self.frame_bytes]
             reference = max(history, key=lambda item: self._correlation(frame, item))

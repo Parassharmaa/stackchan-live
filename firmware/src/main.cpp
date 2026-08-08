@@ -280,6 +280,7 @@ void sendAuthenticatedHello(const String& server_nonce) {
   hello["payload"]["model"] = "StackChan-CoreS3";
   hello["payload"]["audio_mode"] =
       audio.duplexReady() ? "full_duplex" : "half_duplex_fallback";
+  hello["payload"]["physical_render_reference"] = audio.duplexReady();
   hello["payload"]["input_sample_rate"] = 16000;
   hello["payload"]["output_sample_rate"] = 24000;
   hello["payload"]["turn_detection"] = "auto";
@@ -1087,6 +1088,8 @@ void loop() {
     telemetry["payload"]["mode"] =
         audio.duplexReady() ? "full_duplex" : "half_duplex_fallback";
     telemetry["payload"]["microphone_rms"] = audio.microphoneRms();
+    telemetry["payload"]["microphone_left_rms"] = audio.microphoneLeftRms();
+    telemetry["payload"]["microphone_right_rms"] = audio.microphoneRightRms();
     telemetry["payload"]["microphone_peak"] = audio.microphonePeak();
     telemetry["payload"]["microphone_clipped_samples"] =
         audio.microphoneClippedSamples();

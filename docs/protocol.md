@@ -11,7 +11,7 @@ Little-endian layout, followed by signed 16-bit PCM:
 | --- | --- | --- |
 | magic | 4 bytes | `STKA` |
 | version | u8 | `1` |
-| stream | u8 | `1` microphone, `2` speaker |
+| stream | u8 | `1` microphone, `2` speaker, `3` physical render reference |
 | flags | u16 | bit 0 start, bit 1 end, bit 2 cancelled |
 | sequence | u32 | monotonically increasing per stream |
 | timestamp_ms | u32 | sender monotonic timestamp |
@@ -65,10 +65,18 @@ does not send audio or telemetry and does not accept the session as connected
 before `hello.ack`; the static shared secret is never transmitted.
 
 The device `hello` includes persistent `boot_count`, `head_sensor_present`,
-`head_sensor_ready`, `camera_present`, and `camera_mode`. Sensor presence means
+`head_sensor_ready`, `camera_present`, `camera_mode`, and
+`physical_render_reference`. Sensor presence means
 an I2C response was detected; readiness is
 stricter and means the custom channel/wake configuration was written and read
 back successfully.
+
+When `physical_render_reference` is true, the duplex firmware sends stream `3`
+immediately before its same-timestamp microphone frame. It contains 16 kHz
+post-duck PCM derived from the samples most recently written to physical I2S.
+The server uses that stream as its AEC reverse lane and stops feeding the older
+WebSocket-queue estimate. Legacy firmware omits the capability and retains the
+estimated reference path.
 
 ### `playback.state`
 

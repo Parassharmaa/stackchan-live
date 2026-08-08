@@ -12,9 +12,11 @@ This keeps secrets and large models off the robot, makes model upgrades independ
 
 1. Stack-chan captures 16 kHz mono PCM in 20 ms frames.
 2. Frames are sent over a persistent LAN WebSocket with sequence number and capture timestamp.
-3. The Mac runs WebRTC acoustic echo cancellation and noise suppression in
-   10 ms frames, using a 16 kHz playback reference resampled from outgoing TTS,
-   then applies VAD and streaming STT or a speech-to-speech provider. The local
+3. During full-duplex playback the firmware sends the same-timestamp, post-gain
+   physical render reference beside each microphone frame. The Mac runs WebRTC
+   acoustic echo cancellation and noise suppression in 10 ms frames from that
+   reference; older firmware falls back to outgoing-TTS estimation. It then
+   applies VAD and streaming STT or a speech-to-speech provider. The local
    cascade first decodes with base: English returns immediately, while Japanese
    is decoded by resident small. Results at or above `-0.18` average log
    probability return immediately; lower-confidence turns run resident
@@ -29,7 +31,7 @@ This keeps secrets and large models off the robot, makes model upgrades independ
    rate, while the device absorbs network jitter in a bounded buffer. The local
    cascade starts at 40 frames (800 ms) so local Whisper work cannot starve the
    speaker; native streaming speech-to-speech starts at 16 frames (320 ms).
-6. An 80 ms near-end candidate preserves 200 ms of onset audio. The verifier
+6. An 80 ms near-end candidate preserves up to 1.2 seconds of onset audio. The verifier
    decodes WebRTC-AEC audio first and falls back to a bounded render-projected
    stream, recording the source and comparing forced English/Japanese results.
    Only utterance-initial Stop/Wait grammar can open one bounded 26 dB playback-
