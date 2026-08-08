@@ -300,6 +300,25 @@ def _requests_recent_episode(query: str) -> bool:
     )
 
 
+def _wake_name_only(query: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", query).casefold().strip()
+    normalized = re.sub(r"[\s,，.。!！?？、]+", "", normalized)
+    return normalized in {
+        "stackchan",
+        "スタックちゃん",
+        "すたっくちゃん",
+        "스태크chan",
+    }
+
+
+def _requests_preferred_name(query: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", query).casefold()
+    return bool(
+        re.search(r"\b(?:do you know|do you remember|what(?:'s| is)) my name\b", normalized)
+        or re.search(r"(?:私|わたし|僕|ぼく)の名前|名前(?:を)?(?:知って|覚えて)", normalized)
+    )
+
+
 _ENGLISH_QUERY_STOPWORDS = {
     "a",
     "about",
@@ -672,7 +691,18 @@ class MemoryStore:
 
     def retrieve(self, query: str, *, limit: int = 6) -> list[Memory]:
         self.prune_expired()
+        if _wake_name_only(query):
+            return []
         preferred_language = "ja" if _has_japanese(query) else "en"
+        if _requests_preferred_name(query):
+            row = self.connection.execute(
+                """SELECT * FROM memories
+                   WHERE memory_key='identity:preferred_name'
+                     AND (expires_at IS NULL OR expires_at > ?)
+                   ORDER BY updated_at DESC LIMIT 1""",
+                (time.time(),),
+            ).fetchone()
+            return [self._from_row(row)] if row is not None else []
         if _requests_profile_summary(query):
             rows = self.connection.execute(
                 """SELECT * FROM memories

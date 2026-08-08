@@ -607,6 +607,42 @@ def test_japanese_contextual_visual_handoff_requires_recent_showing_context() ->
     assert plan_tools("うん、これだよ。", "ja") == []
 
 
+def test_photo_offer_confirmation_authorizes_exactly_one_correlated_still() -> None:
+    english_context = [
+        ("Camera.", "Would you like me to take one photo of what's in front of me?")
+    ]
+    japanese_context = [
+        ("カメラ。", "前にあるものを写真で一枚撮りましょうか？")
+    ]
+    still_context = [
+        ("カメラを使う提案をして。", "Would you like me to take one camera still?")
+    ]
+
+    assert [
+        item.name
+        for item in plan_tools("Yes.", "en", recent_turns=english_context)
+    ] == ["move_head", "capture_photo"]
+    assert [
+        item.name
+        for item in plan_tools("はい。", "ja", recent_turns=english_context)
+    ] == ["move_head", "capture_photo"]
+    assert [
+        item.name
+        for item in plan_tools("お願いします。", "ja", recent_turns=japanese_context)
+    ] == ["move_head", "capture_photo"]
+    assert [item.name for item in plan_tools("はい。", "ja", recent_turns=still_context)] == [
+        "move_head",
+        "capture_photo",
+    ]
+    assert plan_tools("Yes.", "en") == []
+    assert plan_tools("はい。", "ja", recent_turns=[("元気？", "元気です。")]) == []
+    assert plan_tools(
+        "Yes.",
+        "en",
+        recent_turns=[("Camera.", "I cannot take a photo right now.")],
+    ) == []
+
+
 def test_bilingual_daily_routines_use_distinct_embodied_presets() -> None:
     cases = (
         ("Good morning!", "en", "wake_up", False),

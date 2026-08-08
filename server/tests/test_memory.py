@@ -32,6 +32,26 @@ def test_generic_like_question_does_not_retrieve_unrelated_preference(
     store.close()
 
 
+def test_wake_name_only_never_retrieves_an_unrelated_memory(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.remember("こんにちはスタックちゃん左を向いて私がコーヒーが好きだ", language="ja")
+
+    for query in ("Stack-chan.", "スタックちゃん。", "すたっくちゃん！"):
+        assert store.retrieve(query) == []
+    store.close()
+
+
+def test_preferred_name_recall_crosses_the_conversation_language(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    stored = store.capture_automatic_memories(
+        "パラスと呼んで。", "わかりました。", "ja"
+    )[0]
+
+    assert store.retrieve("Do you know my name?") == [stored]
+    assert store.retrieve("私の名前を覚えていますか？") == [stored]
+    store.close()
+
+
 def test_common_conversation_words_do_not_retrieve_unrelated_episodes(
     tmp_path: Path,
 ) -> None:

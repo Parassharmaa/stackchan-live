@@ -243,6 +243,60 @@ def _contextual_object_handoff_requested(
     return any(marker in recent_text for marker in context_markers)
 
 
+def _contextual_photo_confirmation_requested(
+    text: str, language: str, recent_turns: Sequence[tuple[str, str]]
+) -> bool:
+    """Treat an immediate answer to Stack-chan's photo offer as one-still consent."""
+    if not recent_turns:
+        return False
+    if language == "ja":
+        affirmative = bool(
+            re.fullmatch(
+                r"\s*(?:はい|うん|ええ|お願いします|お願い|撮って|そうして)"
+                r"[。.!！?？\s]*",
+                text,
+            )
+        )
+    else:
+        affirmative = bool(
+            re.fullmatch(
+                r"\s*(?:yes|yeah|yep|sure|please|do it|take it|go ahead)"
+                r"[.!?\s]*",
+                text,
+            )
+        )
+    if not affirmative:
+        return False
+    previous_reply = recent_turns[-1][1].casefold()
+    explicit_offer = bool(
+        re.search(
+            r"(?:would you like me to|do you want me to|shall i|may i|should i)",
+            previous_reply,
+        )
+        or re.search(
+            r"(?:撮りましょうか|撮りますか|撮ってもいい|撮影しましょうか)",
+            previous_reply,
+        )
+    )
+    return explicit_offer and any(
+        marker in previous_reply
+        for marker in (
+            "take one photo",
+            "take a photo",
+            "capture one photo",
+            "capture a photo",
+            "take one camera still",
+            "take a camera still",
+            "capture one camera still",
+            "capture a camera still",
+            "写真を一枚",
+            "写真で一枚",
+            "一枚撮影",
+            "写真を撮",
+        )
+    )
+
+
 def unsupported_action_feedback(transcript: str, language: str) -> list[str]:
     """Return grounding for recognized but unavailable device actions."""
     del transcript, language
@@ -290,6 +344,7 @@ def plan_tools(
         or _explicit_visual_inspection_requested(text, language)
         or _direct_object_inspection_requested(text, language)
         or _contextual_object_handoff_requested(text, language, recent_turns)
+        or _contextual_photo_confirmation_requested(text, language, recent_turns)
     )
     if explicit_photo_request:
         plans.append(

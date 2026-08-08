@@ -99,6 +99,12 @@ cmd = "python scripts/benchmark_tts_steps.py"
 [tasks.benchmark-intelligence]
 cmd = "python scripts/benchmark_eve_intelligence.py --output artifacts/benchmarks/eve-intelligence-latest.json"
 
+[tasks.audit-conversations]
+cmd = "python scripts/audit_conversation_trace.py --input artifacts/benchmarks --output artifacts/benchmarks/conversation-audit-latest.json"
+
+[tasks.behavior-harness]
+cmd = "python scripts/benchmark_text_behaviors.py --output artifacts/benchmarks/text-behaviors-latest.json"
+
 [tasks.benchmark-long-memory]
 cmd = "python scripts/benchmark_long_memory.py --output artifacts/benchmarks/long-memory-latest.json"
 

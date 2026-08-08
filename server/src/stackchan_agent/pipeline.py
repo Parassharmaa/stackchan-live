@@ -532,8 +532,11 @@ class CascadePipeline:
             first_token_ms=(first_token_ns - llm_start) / 1_000_000 if first_token_ns else None,
             characters=sum(map(len, pieces)),
             response=response,
+            language=language,
             memory_count=len(memories),
             memories=memories,
+            planned_tools=[item.name for item in planned_tools],
+            physical_action_results=action_results,
             automatic_memory_count=len(automatic_memories),
             automatic_memory_kinds=[item.kind for item in automatic_memories],
         )
