@@ -121,6 +121,76 @@ async def test_eve_provider_streams_durable_follow_up_without_replaying() -> Non
     )
     assert provider.session_id == "wrun_test"
     assert stream_reads == 2
+    timing = provider.last_timing
+    assert timing.keys() >= {
+        "submitted_ms",
+        "stream_connected_ms",
+        "turn_started_ms",
+        "first_delta_ms",
+        "waiting_ms",
+    }
+    assert (
+        timing["submitted_ms"]
+        <= timing["stream_connected_ms"]
+        <= timing["turn_started_ms"]
+        <= timing["first_delta_ms"]
+        <= timing["waiting_ms"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_eve_session_warmup_is_retained_and_idempotent() -> None:
+    posts: list[str] = []
+    stream_reads = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal stream_reads
+        if request.method == "POST":
+            posts.append(request.url.path)
+            if request.url.path == "/eve/v1/session":
+                body = json.loads(request.content)
+                assert "Internal connection readiness check" in body["message"]
+                return httpx.Response(
+                    202,
+                    json={"ok": True, "sessionId": "wrun_warm", "status": "accepted"},
+                )
+            if request.url.path == "/eve/v1/session/wrun_warm/reset":
+                return httpx.Response(200, json={"ok": True})
+            assert request.url.path == "/eve/v1/session/wrun_warm"
+            return httpx.Response(
+                202,
+                json={"ok": True, "sessionId": "wrun_warm", "status": "accepted"},
+            )
+        if request.method == "GET":
+            stream_reads += 1
+            turn_id = f"turn_{stream_reads}"
+            reply = "ready" if stream_reads == 1 else "Hello there."
+            lines = [
+                event("turn.started", turnId=turn_id),
+                event("message.appended", turnId=turn_id, messageDelta=reply),
+                event("session.waiting", turnId=turn_id),
+            ]
+            return httpx.Response(200, content=("\n".join(lines) + "\n").encode())
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    provider = EveLLM("http://eve.test", transport=httpx.MockTransport(handler))
+
+    await provider.warm_session()
+    await provider.warm_session()
+    reply = "".join(
+        [
+            piece
+            async for piece in provider.generate(
+                TurnContext("Please greet me.", "en", [])
+            )
+        ]
+    )
+
+    assert provider.session_id == "wrun_warm"
+    assert reply == "Hello there."
+    assert posts == ["/eve/v1/session", "/eve/v1/session/wrun_warm"]
+    assert stream_reads == 2
+    await provider.aclose()
 
 
 @pytest.mark.asyncio

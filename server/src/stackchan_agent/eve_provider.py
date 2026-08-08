@@ -171,18 +171,28 @@ class EveLLM(LLMProvider):
         self._pending_denial: _EveToolApproval | None = None
         self._approval_timeout_task: asyncio.Task[None] | None = None
         self._approval_response_lock = asyncio.Lock()
+        self.last_timing: dict[str, float] = {}
+
+    async def warm_session(self) -> None:
+        """Create and retain a ready Eve session for the next spoken turn."""
+        if self.session_id is not None:
+            return
+        async for _ in self.generate(
+            TurnContext(
+                (
+                    "Internal connection readiness check. Reply with the single "
+                    "word ready and do not refer to this check later."
+                ),
+                "en",
+                (),
+            )
+        ):
+            pass
 
     async def warmup(self) -> None:
-        """Pay Eve workflow/model cold-start cost before live device speech."""
+        """Pay Eve workflow/model cold-start cost without retaining a session."""
         try:
-            async for _ in self.generate(
-                TurnContext(
-                    "Reply with the single word ready.",
-                    "en",
-                    (),
-                )
-            ):
-                pass
+            await self.warm_session()
         finally:
             await self.aclose()
 
@@ -520,6 +530,14 @@ class EveLLM(LLMProvider):
         raise RuntimeError("Eve pending turn did not reach its session boundary")
 
     async def generate(self, context: TurnContext) -> AsyncIterator[str]:
+        timing_started = time.perf_counter()
+        self.last_timing = {}
+
+        def mark_timing(name: str) -> None:
+            self.last_timing.setdefault(
+                name, round((time.perf_counter() - timing_started) * 1_000, 3)
+            )
+
         timeout = httpx.Timeout(self.timeout_seconds, connect=5.0)
         async with httpx.AsyncClient(
             base_url=self.base_url, timeout=timeout, transport=self.transport
@@ -573,6 +591,7 @@ class EveLLM(LLMProvider):
                     await self._drain_pending_turn(client)
                 await self._post_message_safely(client, self._message(context))
             assert self.session_id is not None
+            mark_timing("submitted_ms")
             stream_path = f"/eve/v1/session/{self.session_id}/stream"
             emitted = ""
             bounded = False
@@ -586,6 +605,7 @@ class EveLLM(LLMProvider):
                         "GET", stream_path, params={"startIndex": self._cursor}
                     ) as response:
                         response.raise_for_status()
+                        mark_timing("stream_connected_ms")
                         async for line in response.aiter_lines():
                             if not line:
                                 continue
@@ -597,6 +617,7 @@ class EveLLM(LLMProvider):
                             turn_id = data.get("turnId")
                             if event_type == "turn.started":
                                 current_turn_started = True
+                                mark_timing("turn_started_ms")
                                 if isinstance(turn_id, str):
                                     self._turn_started(turn_id)
                             if event_type == "input.requested":
@@ -605,6 +626,7 @@ class EveLLM(LLMProvider):
                             if event_type == "message.appended":
                                 delta = data.get("messageDelta")
                                 if isinstance(delta, str) and delta and not bounded:
+                                    mark_timing("first_delta_ms")
                                     piece, reached_boundary = bound_spoken_delta(
                                         emitted,
                                         clean_spoken_delta(delta),
@@ -636,6 +658,7 @@ class EveLLM(LLMProvider):
                                     continue
                                 self._waiting = True
                                 self._active_turn_id = None
+                                mark_timing("waiting_ms")
                                 if turn_error is not None:
                                     raise turn_error
                                 return

@@ -8,6 +8,22 @@ export default defineTool({
     "List this Stack-chan's local schedules, including paused and completed one-shot schedules.",
   inputSchema: z.object({}),
   async execute(_input, ctx) {
-    return deviceRequest(ctx.session.id, "/schedules");
+    const result = await deviceRequest(ctx.session.id, "/schedules");
+    const { schedules } = z
+      .object({
+        schedules: z.array(
+          z.object({
+            id: z.number().int().positive(),
+            label: z.string(),
+            recurrence: z.enum(["once", "daily"]),
+            local_time: z.string(),
+            timezone: z.string(),
+            enabled: z.boolean(),
+            last_status: z.string().nullable(),
+          }),
+        ),
+      })
+      .parse(result);
+    return { count: schedules.length, schedules };
   },
 });

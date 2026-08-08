@@ -33,9 +33,25 @@ export default defineTool({
     quiet_end: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
   }),
   async execute(input, ctx) {
-    return deviceRequest(ctx.session.id, "/schedules", {
+    const result = await deviceRequest(ctx.session.id, "/schedules", {
       method: "POST",
       body: JSON.stringify(input),
     });
+    const { schedule } = z
+      .object({
+        schedule: z.object({
+          id: z.number().int().positive(),
+          label: z.string(),
+          recurrence: z.enum(["once", "daily"]),
+          local_time: z.string(),
+          timezone: z.string(),
+          quiet_start: z.string(),
+          quiet_end: z.string(),
+          routine: z.string(),
+          capture_photo: z.boolean(),
+        }),
+      })
+      .parse(result);
+    return { created: true, ...schedule };
   },
 });

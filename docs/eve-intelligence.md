@@ -46,9 +46,10 @@ store survives reconnect and remains listable and deletable.
 
 ## Current capability and security boundary
 
-Always-on behavior is in `intelligence/agent/instructions.md`. Six skills cover
+Always-on behavior is in `intelligence/agent/instructions.md`. Ten skills cover
 bilingual conversation, expressive embodiment, memory hygiene, music moods,
-privacy-bounded ambient awareness, and safe daily rhythms. Fourteen typed
+privacy-bounded ambient awareness, safe daily rhythms, workspace checks, focus
+sessions, language practice, and celebrations. Fifteen typed
 tools provide durable memory operations, connected-device status, durable
 schedule management, and bounded
 face, head, light, and coordinated-routine requests through loopback-only Python
@@ -63,13 +64,13 @@ remains a second layer for sensitive phrasing outside the deterministic list.
 
 Eve's default shell, file read/write, glob, grep, arbitrary web fetch/search,
 todo, question parking, and subagent delegation tools are explicitly disabled.
-Only `load_skill` and the fourteen authored memory/device/schedule tools are visible. Eve's
+Only `load_skill` and the fifteen authored memory/device/schedule tools are visible. Eve's
 device tools return dispatch acceptance rather than fabricated completion, while
 the firmware continues to emit terminal measured results. The live contract
 used Eve to read sensor readiness and request a 12-degree head move; firmware
 completed it at raw yaw/pitch error 4/2 and released torque and power.
 
-Explicit requests for one of the fourteen authored tools pass through a bounded AI
+Explicit requests for one of the fifteen authored tools pass through a bounded AI
 SDK middleware. The selector reads only the final user message after the
 application-owned context delimiter, checks that the tool is actually
 advertised, and uses a fixed safe-tool list. It exposes exactly one authorized
@@ -141,19 +142,21 @@ active in the current build.
 ## Model benchmark result
 
 GPT-5.6 Luna is the active sidecar baseline. The latest warmed Eve run passed
-all four bilingual/grounding quality scenarios with a 1,213 ms first-token
-median. A 4,229 ms outlier failed the strict 1.5-second maximum gate. Its exact ten-tool surface, multi-turn
-continuity, cancellation recovery, sensitive-memory denial, authored memory
-create/delete, hardware status, and physically verified head command all
-passed. A prior build let the model speak text resembling a `remember` call;
+all four bilingual/grounding quality scenarios. Fresh sessions measured a 1,574
+ms first-token median and 1,691 ms maximum; after one retained warm-up turn, the
+same scenarios measured a 1,559 ms median and 1,574 ms maximum. Its exact
+fifteen-tool surface, multi-turn continuity, cancellation recovery,
+sensitive-memory denial, authored memory and schedule create/list/delete,
+hardware status, and physically verified head command all passed. A prior build
+let the model speak text resembling a `remember` call;
 the fixed middleware exposes only an explicitly authorized authored tool and
 lets the model make the structured call. It never promotes printed syntax,
 conditional wording, or an example into an action. Arbitrary MCP activation
 remains gated on a connection-specific allowlist and qualified-name policy. The
 generic voice approval transport is now implemented and deterministically
-tested, but no remote MCP connection has been promoted. Eve workflow cold-start
-is paid once during Python server startup rather
-than on the first spoken turn. Direct Luna transport probes started in
+tested, but no remote MCP connection has been promoted. The authenticated device
+handshake now creates and retains its Eve session before conversation begins,
+and records success or failure as device telemetry. Direct Luna transport probes started in
 925-1,035 ms, showing that the remaining tail is primarily hosted model/network
 latency. Historical Qwen 3.5 9B correctly called the typed memory tool
 and answered the failed common-sense case, but measured 36.5 seconds for the

@@ -3247,6 +3247,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
                     if isinstance(llm, EveLLM):
                         await llm.bind_device(device_id)
+                        warmup_started_ns = time.perf_counter_ns()
+                        try:
+                            await llm.warm_session()
+                        except (httpx.HTTPError, RuntimeError, TimeoutError) as error:
+                            await llm.aclose()
+                            results_for(device_id).append(
+                                {
+                                    "type": "telemetry",
+                                    "component": "eve_session_warmup",
+                                    "status": "failed",
+                                    "error": type(error).__name__,
+                                    "duration_ms": (
+                                        time.perf_counter_ns() - warmup_started_ns
+                                    )
+                                    / 1_000_000,
+                                }
+                            )
+                        else:
+                            results_for(device_id).append(
+                                {
+                                    "type": "telemetry",
+                                    "component": "eve_session_warmup",
+                                    "status": "ready",
+                                    "duration_ms": (
+                                        time.perf_counter_ns() - warmup_started_ns
+                                    )
+                                    / 1_000_000,
+                                }
+                            )
                     if sensor_llm is not None:
                         await sensor_llm.bind_device(device_id)
                     authenticated = True

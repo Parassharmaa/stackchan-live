@@ -228,6 +228,44 @@ async def check_cancel_recovery(base_url: str) -> dict:
         await provider.aclose()
 
 
+async def check_persistent_session_latency(base_url: str) -> dict:
+    """Measure the connection shape used by the physical device after its first turn."""
+    provider = EveLLM(base_url)
+    results = []
+    try:
+        await collect_reply(
+            provider,
+            TurnContext("Reply with the single word ready.", "en", []),
+        )
+        for scenario in SCENARIOS:
+            reply, first_token_ms, total_ms = await collect_reply(
+                provider, scenario.context
+            )
+            passed, reasons = evaluate(scenario, reply)
+            results.append(
+                {
+                    "name": scenario.name,
+                    "passed": passed,
+                    "failure_reasons": reasons,
+                    "first_token_ms": first_token_ms,
+                    "total_ms": total_ms,
+                    "provider_timing": dict(provider.last_timing),
+                }
+            )
+    finally:
+        await provider.aclose()
+    first_tokens = [
+        item["first_token_ms"] for item in results if item["first_token_ms"] is not None
+    ]
+    return {
+        "passed": all(item["passed"] for item in results),
+        "first_token_p50_ms": statistics.median(first_tokens) if first_tokens else None,
+        "first_token_max_ms": max(first_tokens) if first_tokens else None,
+        "realtime_gate_passed": bool(first_tokens) and max(first_tokens) <= 1_500,
+        "turns": results,
+    }
+
+
 async def check_eve_memory_tools(base_url: str, core_url: str) -> dict:
     marker = f"EveToolBenchmark{uuid.uuid4().hex[:10]}"
     memory_id = None
@@ -377,6 +415,95 @@ async def check_eve_device_tools(base_url: str, core_url: str) -> dict:
         }
 
 
+async def check_eve_schedule_tools(base_url: str, core_url: str) -> dict:
+    marker = f"{uuid.uuid4().int % 1_000_000:06d}"
+    label = f"Benchmark schedule {marker}"
+    schedule_id = None
+    cleanup_ids: set[int] = set()
+    create_reply = ""
+    list_reply = ""
+    delete_reply = ""
+    async with httpx.AsyncClient(base_url=core_url.rstrip("/"), timeout=5.0) as client:
+        devices_response = await client.get("/v1/devices")
+        devices_response.raise_for_status()
+        devices = devices_response.json().get("devices", [])
+        if not devices:
+            return {"passed": False, "error": "no physical Stack-chan connected"}
+        device_id = str(devices[0])
+        provider = EveLLM(base_url, core_url=core_url, device_id=device_id)
+        try:
+            before = await client.get(f"/v1/devices/{device_id}/schedules")
+            before.raise_for_status()
+            before_ids = {int(item["id"]) for item in before.json()["schedules"]}
+            create_reply, _, _ = await collect_reply(
+                provider,
+                TurnContext(
+                    f"Schedule a one-time check-in named {label} on 2099-01-01 at "
+                    "09:00 UTC, with quiet hours 22:00 to 07:00 and no camera. "
+                    "Use the focus routine and ask whether I am ready to focus.",
+                    "en",
+                    [],
+                ),
+            )
+            listed = await client.get(f"/v1/devices/{device_id}/schedules")
+            listed.raise_for_status()
+            new_items = [
+                item
+                for item in listed.json()["schedules"]
+                if int(item["id"]) not in before_ids
+            ]
+            cleanup_ids = {int(item["id"]) for item in new_items}
+            created_through_eve = len(new_items) == 1
+            if created_through_eve:
+                schedule_id = int(new_items[0]["id"])
+                list_reply, _, _ = await collect_reply(
+                    provider,
+                    TurnContext(
+                        "Show me my schedules and say only whether schedule ID "
+                        f"{schedule_id} is listed.",
+                        "en",
+                        [],
+                    ),
+                )
+                delete_reply, _, _ = await collect_reply(
+                    provider,
+                    TurnContext(f"Delete schedule ID {schedule_id}.", "en", []),
+                )
+            after = await client.get(f"/v1/devices/{device_id}/schedules")
+            after.raise_for_status()
+            still_present = schedule_id is not None and any(
+                int(item["id"]) == schedule_id for item in after.json()["schedules"]
+            )
+            deleted_through_eve = created_through_eve and not still_present
+            listed_through_eve = (
+                schedule_id is not None
+                and any(
+                    cue in list_reply.casefold()
+                    for cue in ("yes", "listed", "present", "found")
+                )
+            )
+            if deleted_through_eve:
+                cleanup_ids.discard(schedule_id)
+                schedule_id = None
+            return {
+                "passed": (
+                    created_through_eve
+                    and listed_through_eve
+                    and deleted_through_eve
+                ),
+                "created_through_eve": created_through_eve,
+                "listed_through_eve": listed_through_eve,
+                "deleted_through_eve": deleted_through_eve,
+                "create_reply": create_reply,
+                "list_reply": list_reply,
+                "delete_reply": delete_reply,
+            }
+        finally:
+            await provider.aclose()
+            for cleanup_id in cleanup_ids:
+                await client.delete(f"/v1/devices/{device_id}/schedules/{cleanup_id}")
+
+
 async def check_memory_boundary(core_url: str) -> dict:
     marker = f"Eve benchmark marker {uuid.uuid4().hex}"
     memory_id = None
@@ -448,6 +575,9 @@ async def run(
         str(tool.get("name")) for tool in info.get("tools", {}).get("available", [])
     }
     expected_tools = {
+        "capture_photo",
+        "create_schedule",
+        "delete_schedule",
         "device_status",
         "load_skill",
         "move_head",
@@ -455,9 +585,11 @@ async def run(
         "remember",
         "recall_memory",
         "list_memories",
+        "list_schedules",
         "forget_memory",
         "set_face",
         "set_lights",
+        "set_schedule_enabled",
     }
     dangerous_tools = {
         "bash",
@@ -505,6 +637,7 @@ async def run(
                 "total_ms": total_ms,
                 "characters": len(reply),
                 "reply": reply,
+                "provider_timing": dict(provider.last_timing),
             }
         except BENCHMARK_FAILURES as error:
             result = {
@@ -525,12 +658,18 @@ async def run(
         "tool_surface": tool_surface,
         "multi_turn": await capture_contract_check(check_multi_turn(base_url)),
         "cancel_recovery": await capture_contract_check(check_cancel_recovery(base_url)),
+        "persistent_session": await capture_contract_check(
+            check_persistent_session_latency(base_url)
+        ),
         "memory_boundary": await capture_contract_check(check_memory_boundary(core_url)),
         "eve_memory_tools": await capture_contract_check(
             check_eve_memory_tools(base_url, core_url)
         ),
         "eve_device_tools": await capture_contract_check(
             check_eve_device_tools(base_url, core_url)
+        ),
+        "eve_schedule_tools": await capture_contract_check(
+            check_eve_schedule_tools(base_url, core_url)
         ),
     }
     # Allow the sidecar logger to flush failures from the final durable reset.

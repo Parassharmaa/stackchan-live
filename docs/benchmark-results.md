@@ -43,11 +43,14 @@ first-audio latency from the prior 1,797/2,649 ms English/Japanese result to
 frames, zero starvation, 108/137 mouth transitions, and 5/6 blinks.
 
 The refreshed `eve-intelligence-latest.json` passed all four quality scenarios
-and every safety/session/memory/device contract. A natural “Are your physical
+and every safety/session/memory/device/schedule contract. A natural “Are your physical
 head sensors ready?” request was grounded in live status, and the session-bound
-12-degree move completed with raw yaw/pitch error 4/3 before torque and power
-were released. First-token p50 was 1,225 ms; the 1,514 ms maximum missed the
-strict 1,500 ms gate by 14 ms, so hosted tail latency remains open.
+12-degree move completed with raw yaw/pitch error 4/2 before torque and power
+were released. Eve also created, listed, and deleted an isolated one-shot
+schedule with no leftover entry. Fresh-session first-token p50/max were
+1,574/1,691 ms; a retained warmed session measured 1,559/1,574 ms. Quality and
+contracts pass, but hosted generation remains just above the strict 1,500 ms
+gate.
 
 `long-memory-latest.json` passed 20 alternating bilingual distractor turns,
 exact English/Japanese recall, duplicate suppression, HTTP 422 sensitive-data
