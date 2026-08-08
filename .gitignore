@@ -1,0 +1,48 @@
+# OS and editor state
+.DS_Store
+.idea/
+.vscode/
+
+# Local environments and caches
+.pixi/
+.venv/
+.tools/
+node_modules/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+
+# Local configuration and credentials. Keep the examples public.
+.env
+.env.*
+!.env.example
+secrets/
+firmware/include/DeviceSecret.hpp
+firmware/include/LocalConfig.hpp
+
+# Private runtime data and diagnostics
+artifacts/
+server/data/
+*.log
+*.jsonl
+*.wav
+*.pcm
+*.sqlite3
+*.sqlite3-*
+
+# Generated firmware assets and build outputs
+firmware/.pio/
+firmware/build/
+firmware/assets/faces/
+firmware/include/generated/
+firmware/src/generated/
+*.bin
+*.elf
+*.map
+
+# Eve and test/build output
+intelligence/.eve/
+intelligence/.output/
+coverage/
+dist/

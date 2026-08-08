@@ -1,0 +1,154 @@
+[workspace]
+name = "stackchan-local"
+version = "0.1.0"
+description = "Custom local-first Stack-chan firmware, voice agent, and benchmarks"
+authors = ["Paras"]
+channels = ["conda-forge"]
+platforms = ["osx-arm64"]
+
+[dependencies]
+python = "3.12.*"
+pip = ">=25,<27"
+ffmpeg = ">=7,<9"
+platformio = ">=6.1,<7"
+nodejs = "24.*"
+ripgrep = ">=14,<16"
+
+[pypi-dependencies]
+stackchan-local = { path = "server", editable = true }
+pillow = ">=11,<13"
+trimesh = ">=4.8, <5"
+supertonic = { version = ">=1.3.1, <2", extras = ["serve"] }
+websockets = ">=15, <17"
+aec-audio-processing = { url = "https://files.pythonhosted.org/packages/85/d5/de9dc1feef6e3ef9d688819577d7864214b210f81a0169589342dbfc763e/aec_audio_processing-1.0.0-cp312-cp312-macosx_15_0_arm64.whl" }
+webrtcvad-wheels = "==2.0.14"
+
+[feature.dev.dependencies]
+pytest = ">=8.4,<9"
+pytest-asyncio = ">=1.1,<2"
+ruff = ">=0.12,<1"
+
+[environments]
+default = { features = ["dev"], solve-group = "default" }
+
+[tasks.test]
+cmd = "pytest -q server/tests"
+
+[tasks.lint]
+cmd = "ruff check server/src server/tests scripts"
+
+[tasks.server]
+cmd = "stackchan-server"
+cwd = "server"
+
+[tasks.intelligence-install]
+cmd = "npm install"
+cwd = "intelligence"
+
+[tasks.intelligence]
+cmd = "npm run dev"
+cwd = "intelligence"
+
+[tasks.intelligence-build]
+cmd = "npm run build"
+cwd = "intelligence"
+
+[tasks.intelligence-typecheck]
+cmd = "npm run typecheck"
+cwd = "intelligence"
+
+[tasks.intelligence-check]
+cmd = "npm ci && npm test && npm run typecheck && npm run build"
+cwd = "intelligence"
+
+[tasks.intelligence-eval]
+cmd = "python scripts/benchmark_eve_intelligence.py --output artifacts/benchmarks/eve-intelligence-latest.json"
+
+[tasks.firmware-build]
+cmd = "platformio run -d firmware"
+depends-on = ["face-assets"]
+
+[tasks.face-assets]
+cmd = "python scripts/build_face_assets.py"
+
+[tasks.firmware-upload]
+cmd = "platformio run -d firmware -t upload"
+depends-on = ["face-assets"]
+
+[tasks.download-models]
+cmd = "bash scripts/download_whisper_models.sh"
+
+[tasks.provision-device]
+cmd = "python scripts/provision_device_token.py"
+
+[tasks.publication-audit]
+cmd = "bash scripts/audit_publication.sh"
+
+[tasks.benchmark]
+cmd = "python scripts/benchmark_local_pipeline.py --output artifacts/benchmarks/latest.json"
+
+[tasks.benchmark-realtime]
+cmd = "python scripts/benchmark_realtime_provider.py"
+
+[tasks.benchmark-tts-steps]
+cmd = "python scripts/benchmark_tts_steps.py"
+
+[tasks.benchmark-intelligence]
+cmd = "python scripts/benchmark_eve_intelligence.py --output artifacts/benchmarks/eve-intelligence-latest.json"
+
+[tasks.benchmark-long-memory]
+cmd = "python scripts/benchmark_long_memory.py --output artifacts/benchmarks/long-memory-latest.json"
+
+[tasks.benchmark-adaptive-memory]
+cmd = "python scripts/benchmark_adaptive_memory.py --output artifacts/benchmarks/adaptive-memory-latest.json"
+
+[tasks.benchmark-stt-routing]
+cmd = "python scripts/benchmark_stt_routing.py"
+
+[tasks.benchmark-stt-routing-broad]
+cmd = "python scripts/benchmark_stt_routing.py --suite broad-ja --output artifacts/benchmarks/stt-routing-broad-ja.json"
+
+[tasks.e2e-probe]
+cmd = "python scripts/e2e_ws_probe.py --url ws://127.0.0.1:8765/v1/device"
+
+[tasks.sensor-probe]
+cmd = "python scripts/sensor_ws_probe.py --url ws://127.0.0.1:8765/v1/device"
+
+[tasks.hil-sensor]
+cmd = "python scripts/benchmark_hil_sensor.py"
+
+[tasks.hil-sensor-interrupt]
+cmd = "python scripts/benchmark_hil_sensor_interrupt.py --output artifacts/benchmarks/hil-sensor-interrupt-latest.json"
+
+[tasks.hil-voice-benchmark]
+cmd = "python scripts/benchmark_hil_voice.py --output artifacts/benchmarks/hil-latest.json"
+
+[tasks.hil-no-false-barge]
+cmd = "python scripts/benchmark_hil_no_false_barge.py --output artifacts/benchmarks/hil-no-false-barge-latest.json"
+
+[tasks.hil-routine-music]
+cmd = "python scripts/benchmark_hil_routine_music.py --output artifacts/benchmarks/hil-routine-music-latest.json"
+
+[tasks.hil-memory]
+cmd = "python scripts/benchmark_hil_memory.py --output artifacts/benchmarks/hil-memory-latest.json"
+
+[tasks.hil-profile-memory]
+cmd = "python scripts/benchmark_hil_profile_memory.py --output artifacts/benchmarks/hil-profile-memory-latest.json"
+
+[tasks.hil-soak]
+cmd = "python scripts/soak_hil_voice.py"
+
+[tasks.hil-capabilities]
+cmd = "python scripts/benchmark_hil_capabilities.py"
+
+[tasks.hil-voice-motion]
+cmd = "python scripts/benchmark_hil_voice_motion.py"
+
+[tasks.hil-recent-regressions]
+cmd = "python scripts/benchmark_hil_recent_regressions.py --output artifacts/benchmarks/hil-recent-regressions-latest.json"
+
+[tasks.hil-conversation-depth]
+cmd = "python scripts/benchmark_hil_conversation_depth.py --output artifacts/benchmarks/hil-conversation-depth-latest.json"
+
+[tasks.check]
+depends-on = ["lint", "test", "firmware-build", "intelligence-check"]

@@ -1,0 +1,26 @@
+{
+  "name": "stackchan-intelligence",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "eve dev --port 2000",
+    "build": "eve build",
+    "test": "node --test agent/lib/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/provider": "4.0.6",
+    "ai": "7.0.56",
+    "eve": "0.31.1",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "microsandbox": "^0.5.10",
+    "typescript": "^5.9.3"
+  }
+}
