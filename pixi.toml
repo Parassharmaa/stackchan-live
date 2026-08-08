@@ -41,6 +41,9 @@ cmd = "ruff check server/src server/tests scripts"
 cmd = "stackchan-server"
 cwd = "server"
 
+[tasks.start]
+cmd = "stackchan"
+
 [tasks.intelligence-install]
 cmd = "npm install"
 cwd = "intelligence"

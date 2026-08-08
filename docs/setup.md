@@ -93,34 +93,20 @@ write over the NVS partition if the saved Wi-Fi must be preserved. A full-flash
 backup, if you choose to keep one, belongs outside this repository because it
 can contain network credentials.
 
-## 5. Start the intelligence and realtime services
-
-Terminal 1:
+## 5. Start Stack-chan
 
 ```sh
-pixi run intelligence
+pixi run start
 ```
 
-Terminal 2:
+This one command starts Eve, the resident Whisper and Supertonic services,
+SQLite memory, and the authenticated robot WebSocket server. It prints a short
+readiness summary and waits for Stack-chan to reconnect. Press `Ctrl-C` to stop
+every service it started; detailed logs are under `artifacts/logs/`.
 
-```sh
-pixi run server
-```
-
-The server starts resident local Whisper and Supertonic services, warms Eve,
-and listens for the authenticated robot WebSocket. Raw microphone audio, speech
-models, TTS, and SQLite memory stay on the Mac. Final transcripts, selected
-memory/context, and tool schemas are sent to the configured Eve model.
-
-Check readiness from a third terminal:
-
-```sh
-curl --fail http://127.0.0.1:8765/health
-curl --fail http://127.0.0.1:8765/v1/devices
-```
-
-The health response should report Eve, Whisper, and Supertonic ready. The device
-list should show Stack-chan after it reconnects to Wi-Fi and completes pairing.
+Raw microphone audio, speech models, TTS, and SQLite memory stay on the Mac.
+Final transcripts, selected memory/context, and tool schemas are sent to the
+configured Eve model.
 
 ## 6. Validate before normal use
 

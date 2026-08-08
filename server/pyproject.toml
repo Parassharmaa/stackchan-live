@@ -24,6 +24,7 @@ dev = [
 ]
 
 [project.scripts]
+stackchan = "stackchan_agent.launcher:main"
 stackchan-server = "stackchan_agent.app:main"
 stackchan-bench = "stackchan_agent.bench:main"
 
