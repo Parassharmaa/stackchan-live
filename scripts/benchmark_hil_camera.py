@@ -60,8 +60,26 @@ async def benchmark(base_url: str, timeout_s: float) -> dict:
         default=0,
     )
     offsets = trace_offsets()
+    conversation_started_ns = time.perf_counter_ns()
+    await say(
+        "Samantha",
+        "I made a small 3D-printed object. Would you like to see it?",
+    )
+    first_playback_started = await wait_for_device_playback(
+        base_url, device_id, conversation_started_ns, timeout_s
+    )
+    first_playback_drained = await wait_for_device_idle(
+        base_url, device_id, stable_s=0.7, timeout_s=timeout_s
+    )
+    first_results = fetch_json(result_url).get("results", [])
+    premature_capture = any(
+        item.get("tool") == "capture_photo"
+        and item.get("received_monotonic_ns", 0) >= conversation_started_ns
+        for item in first_results
+    )
+
     started_ns = time.perf_counter_ns()
-    await say("Samantha", "Look at me and tell me how I'm looking today.")
+    await say("Samantha", "Just look at it. Here it is.")
 
     deadline = time.monotonic() + timeout_s
     events: list[dict] = []
@@ -129,11 +147,27 @@ async def benchmark(base_url: str, timeout_s: float) -> dict:
                 vision_terms.update(
                     str(label["name"]).casefold().replace("_", " ").split()
                 )
-    response_text = " ".join(responses).casefold()
+    response_text = (responses[-1] if responses else "").casefold()
     response_uses_vision = bool(
         (
             (vision_terms and any(term in response_text for term in vision_terms))
-            or (vision_reported_uncertainty and "could not identify" in response_text)
+            or (
+                vision_reported_uncertainty
+                and any(
+                    phrase in response_text
+                    for phrase in (
+                        "could not identify",
+                        "couldn't identify",
+                        "couldn’t identify",
+                        "can't identify",
+                        "can’t identify",
+                        "cannot identify",
+                        "isn't clear enough",
+                        "is not clear enough",
+                        "not clear enough",
+                    )
+                )
+            )
         )
         and "can't see you right now" not in response_text
         and "cannot see you right now" not in response_text
@@ -185,10 +219,19 @@ async def benchmark(base_url: str, timeout_s: float) -> dict:
     after_drops = latest_drop_count(after, default=before_drops)
     after_starvations = latest_starvation_count(after, default=before_starvations)
     passed = bool(
-        len(transcripts) == 1
-        and "look" in transcripts[0].casefold()
-        and "me" in transcripts[0].casefold()
-        and len(responses) == 1
+        len(transcripts) == 2
+        and "3d" in transcripts[0].casefold().replace("-", "")
+        and (
+            (
+                "look" in transcripts[1].casefold()
+                and "it" in transcripts[1].casefold()
+            )
+            or "here it is" in transcripts[1].casefold()
+        )
+        and len(responses) == 2
+        and first_playback_started
+        and first_playback_drained
+        and not premature_capture
         and response_uses_vision
         and motion_completed
         and capture_completed
@@ -207,6 +250,7 @@ async def benchmark(base_url: str, timeout_s: float) -> dict:
         "device": fetch_json(f"{base_url}/v1/devices/{encoded_device}"),
         "transcripts": transcripts,
         "responses": responses,
+        "premature_capture_before_visual_handoff": premature_capture,
         "response_uses_vision": response_uses_vision,
         "motion_completed": motion_completed,
         "camera_captures": captures,

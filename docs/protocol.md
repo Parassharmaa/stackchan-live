@@ -120,8 +120,9 @@ mini-song but does not bypass the paced audio transport or motion safety gates.
 
 ### `camera.capture`
 
-Server-to-device request for one correlated still. Capture is allowed only for
-an explicit user photo request. Firmware centers the head, shows a curious face
+Server-to-device request for one correlated still. Capture is allowed for an
+explicit photo request or direct one-shot visual consent such as “look at this,”
+“what is this?”, or a context-confirmed “here it is.” Firmware centers the head, shows a curious face
 and white capture light, temporarily owns the shared internal camera-control
 bus, sends one `STKI` JPEG, restores the light/sensor bus, and returns a matching
 terminal `tool.result`. The laptop stores captures only under ignored local
@@ -142,6 +143,13 @@ Loopback-only hardware-test request that makes the device emit `turn.commit` for
 its current microphone buffer. It exists so automated HIL tests can exercise
 the physical microphone without touching the display and is not exposed to the
 agent tool set.
+
+### Screen double tap
+
+While speaker playback is active, the first touchscreen tap is inert and a
+second tap inside M5Unified's bounded multi-click window immediately flushes
+playback and sends `barge_in` with reason `screen_double_tap`. A normal single
+tap while idle retains the existing manual `turn.commit` behavior.
 
 ### `sensor.head`
 

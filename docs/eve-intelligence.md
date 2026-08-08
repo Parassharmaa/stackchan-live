@@ -64,22 +64,23 @@ remains a second layer for sensitive phrasing outside the deterministic list.
 
 Eve's default shell, file read/write, glob, grep, arbitrary web fetch/search,
 todo, question parking, and subagent delegation tools are explicitly disabled.
-Only `load_skill` and the fifteen authored memory/device/schedule tools are visible. Eve's
-device tools return dispatch acceptance rather than fabricated completion, while
-the firmware continues to emit terminal measured results. The live contract
+Only `load_skill` and the fifteen authored memory/device/schedule tools are visible.
+Eve's device tools wait for the correlated terminal firmware result; dispatch
+acceptance alone is never treated as completion. The live contract
 used Eve to read sensor readiness and request a 12-degree head move; firmware
 completed it at raw yaw/pitch error 4/2 and released torque and power.
 
 Explicit requests for one of the fifteen authored tools pass through a bounded AI
-SDK middleware. The selector reads only the final user message after the
+SDK middleware. The selector recovers the latest user message after the
 application-owned context delimiter, checks that the tool is actually
-advertised, and uses a fixed safe-tool list. It exposes exactly one authorized
-tool and lets the model issue the schema-validated structured call. Ordinary
-turns retain only `load_skill`, and the answer step after a tool result has no
-tools at all. Conditional wording, metalinguistic examples, framework tools,
-unknown tools, and future MCP names never authorize mutation. This prevents
-model-written pseudo tool text from becoming an action or creating a duplicate
-write/movement loop.
+advertised, and uses a fixed safe-tool list. On each semantic model step it
+exposes exactly the next authorized, not-yet-executed tool and lets the model
+issue the schema-validated structured call. Eve can therefore complete several
+distinct tools in one user turn and reply from their results; every tool is
+bounded to one call per turn. Each model step is capped at 2,000 output tokens.
+Ordinary turns retain only `load_skill`, while the final answer step after the
+authorized sequence has no tools. Conditional wording, metalinguistic examples,
+framework tools, unknown tools, and future MCP names never authorize mutation.
 
 ## Adding MCP safely
 

@@ -565,8 +565,13 @@ def test_visual_inspection_requests_run_the_correlated_multistep_camera_lane() -
         ("Look at me and tell me how I'm looking today.", "en"),
         ("How am I looking today?", "en"),
         ("What do I look like?", "en"),
+        ("Just look at it. Here it is.", "en"),
+        ("What is this?", "en"),
+        ("What am I holding?", "en"),
         ("私を見て、今日の私はどう見える？", "ja"),
         ("私の服装はどう？", "ja"),
+        ("これを見て。", "ja"),
+        ("これ何？", "ja"),
     )
 
     for transcript, language in cases:
@@ -575,6 +580,31 @@ def test_visual_inspection_requests_run_the_correlated_multistep_camera_lane() -
             ("move_head", {"yaw_deg": 0.0, "pitch_deg": 45.0, "duration_ms": 550}),
             ("capture_photo", {"quality": 70}),
         ]
+
+
+def test_contextual_visual_handoff_uses_recent_dialogue_without_magic_words() -> None:
+    recent_turns = [
+        (
+            "I made a small 3D-printed object. Do you want to see it?",
+            "Yes, show it to me and hold it where my camera can see it.",
+        )
+    ]
+
+    planned = plan_tools("Yeah, here it is.", "en", recent_turns=recent_turns)
+
+    assert [item.name for item in planned] == ["move_head", "capture_photo"]
+    assert plan_tools("Yeah, here it is.", "en") == []
+    assert plan_tools("I made an object. Would you like to see it?", "en") == []
+
+
+def test_japanese_contextual_visual_handoff_requires_recent_showing_context() -> None:
+    recent_turns = [("これを見たい？", "見せて。カメラの前に持ってきてね。")]
+
+    assert [
+        item.name
+        for item in plan_tools("うん、これだよ。", "ja", recent_turns=recent_turns)
+    ] == ["move_head", "capture_photo"]
+    assert plan_tools("うん、これだよ。", "ja") == []
 
 
 def test_bilingual_daily_routines_use_distinct_embodied_presets() -> None:

@@ -8,10 +8,12 @@ The project provides:
 
 - custom ESP32-S3 firmware with an animated face, head motion, lights, audio,
   top-touch input, and privacy-visible camera stills for photo and direct
-  “look at me” requests;
+  “look at me/this” requests;
 - laptop-local Whisper STT, Supertonic TTS, audio scheduling, SQLite memory,
   and opt-in proactive schedules;
 - Vercel Eve intelligence with bilingual conversation, skills, and typed tools;
+- bounded multi-tool turns with firmware-result grounding and screen double-tap
+  interruption;
 - pluggable cascade and OpenAI Realtime speech-to-speech providers;
 - eight coordinated expression routines, six original music styles, and
   reproducible software and hardware-in-the-loop benchmarks;

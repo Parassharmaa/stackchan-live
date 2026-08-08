@@ -49,6 +49,15 @@ def test_control_accepts_flat_payload_for_firmware_convenience() -> None:
     assert decoded.payload == {"at_ms": 123}
 
 
+def test_barge_in_preserves_screen_double_tap_reason() -> None:
+    decoded = ControlMessage.decode(
+        '{"type":"barge_in","payload":{"reason":"screen_double_tap"}}'
+    )
+
+    assert decoded.type == "barge_in"
+    assert decoded.payload == {"reason": "screen_double_tap"}
+
+
 def test_image_frame_round_trip() -> None:
     original = ImageFrame(
         request_id="0123456789abcdef0123456789abcdef",

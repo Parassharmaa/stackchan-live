@@ -1,5 +1,5 @@
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -110,9 +110,11 @@ TOOLS: dict[str, Tool] = {
     "capture_photo": Tool(
         "capture_photo",
         (
-            "Capture one privacy-visible still for an explicit photo or visual-inspection "
-            "request about the user. The caller must wait for the correlated capture and "
-            "local-vision result before describing what is visible."
+            "Capture one privacy-visible still for an explicit photo request, a direct "
+            "visual request such as 'look at this' or 'what is this?', or a contextual "
+            "handoff such as 'here it is' after the user offered to show something. The "
+            "caller must wait for the correlated capture and local-vision result before "
+            "describing what is visible."
         ),
         CapturePhotoArgs,
         _capture_photo,
@@ -188,6 +190,59 @@ def _explicit_visual_inspection_requested(text: str, language: str) -> bool:
     )
 
 
+def _direct_object_inspection_requested(text: str, language: str) -> bool:
+    """Recognize a direct, one-still request to inspect a presented object."""
+    if language == "ja":
+        return bool(
+            re.search(r"(?:これ|それ|あれ)を?(?:見て|見てみて|確認して|チェックして)", text)
+            or re.search(r"(?:これ|それ|あれ)(?:は)?(?:何|なに|どう見える)", text)
+            or re.search(r"(?:私|僕|わたし)が(?:持って|見せて)いる(?:もの|物).*(?:何|見て)", text)
+        )
+    return bool(
+        re.search(r"\b(?:look at|look over|check|inspect)\s+(?:this|that|it)\b", text)
+        or re.search(r"\bwhat(?:'s| is)\s+(?:this|that)\b", text)
+        or re.search(r"\bwhat\s+(?:am i|i am)\s+(?:holding|showing)\b", text)
+        or re.search(r"\b(?:can|could|would)\s+you\s+(?:tell me\s+)?what\s+this\s+is\b", text)
+    )
+
+
+def _contextual_object_handoff_requested(
+    text: str, language: str, recent_turns: Sequence[tuple[str, str]]
+) -> bool:
+    """Authorize a deictic handoff only when the recent dialogue established showing."""
+    if language == "ja":
+        handoff = bool(
+            re.search(
+                r"(?:はい|うん|ほら)?[、, ]*(?:これ|ここ)(?:です|だよ|にある|見せる)",
+                text,
+            )
+        )
+        context_markers = ("見せ", "見て", "カメラ", "持って", "写真", "撮")
+    else:
+        handoff = bool(
+            re.fullmatch(
+                r"\s*(?:(?:yes|yeah|okay|ok)[,!. ]*)?(?:here|there)\s+(?:it|this)\s+is[.!?\s]*",
+                text,
+            )
+            or re.fullmatch(r"\s*(?:yes|yeah)[,!. ]+(?:here|there)(?: you go)?[.!?\s]*", text)
+        )
+        context_markers = (
+            "show it",
+            "show me",
+            "let me see",
+            "wanna see",
+            "want to see",
+            "hold it",
+            "camera",
+            "photo",
+            "picture",
+        )
+    if not handoff:
+        return False
+    recent_text = "\n".join(part.casefold() for turn in recent_turns[-2:] for part in turn)
+    return any(marker in recent_text for marker in context_markers)
+
+
 def unsupported_action_feedback(transcript: str, language: str) -> list[str]:
     """Return grounding for recognized but unavailable device actions."""
     del transcript, language
@@ -201,7 +256,11 @@ async def invoke_tool(name: str, arguments: dict[str, Any]) -> ControlMessage:
     return await tool.handler(tool.schema.model_validate(arguments))
 
 
-def plan_tools(transcript: str, language: str) -> list[PlannedTool]:
+def plan_tools(
+    transcript: str,
+    language: str,
+    recent_turns: Sequence[tuple[str, str]] = (),
+) -> list[PlannedTool]:
     """Fast deterministic intent lane for latency-critical device actions.
 
     An LLM tool router can be added later, but direct bilingual phrases should
@@ -229,6 +288,8 @@ def plan_tools(transcript: str, language: str) -> list[PlannedTool]:
             )
         )
         or _explicit_visual_inspection_requested(text, language)
+        or _direct_object_inspection_requested(text, language)
+        or _contextual_object_handoff_requested(text, language, recent_turns)
     )
     if explicit_photo_request:
         plans.append(

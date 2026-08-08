@@ -52,7 +52,6 @@ bool server_connected = false;
 String pending_server_nonce;
 String pending_device_nonce;
 bool reported_playback_active = false;
-uint32_t last_touch_ms = 0;
 uint32_t last_energy_ms = 0;
 uint32_t last_audio_telemetry_ms = 0;
 uint32_t last_head_sensor_telemetry_ms = 0;
@@ -176,6 +175,15 @@ const char* resetReasonName(esp_reset_reason_t reason) {
 void sendControl(const char* type) {
   JsonDocument document;
   document["type"] = type;
+  String output;
+  serializeJson(document, output);
+  socket_client.sendTXT(output);
+}
+
+void sendBargeIn(const char* reason) {
+  JsonDocument document;
+  document["type"] = "barge_in";
+  document["payload"]["reason"] = reason;
   String output;
   serializeJson(document, output);
   socket_client.sendTXT(output);
@@ -901,11 +909,17 @@ bool connectWifiFromFactoryNvs() {
 }
 
 void handleTouch(uint32_t now_ms) {
-  if (!server_connected || now_ms - last_touch_ms < 700 || M5.Touch.getCount() == 0) return;
-  last_touch_ms = now_ms;
+  (void)now_ms;
+  if (!server_connected || M5.Touch.getCount() == 0) return;
+  const auto& detail = M5.Touch.getDetail(0);
+  if (!detail.wasClicked()) return;
   if (audio.playbackActive()) {
+    // A single tap during playback is intentionally inert. The second tap in
+    // M5Unified's bounded click window is the explicit physical interruption.
+    if (detail.getClickCount() < 2) return;
     flushAudioWithSensorGuard();
-    sendControl("barge_in");
+    reportPlaybackState(false);
+    sendBargeIn("screen_double_tap");
     face.setState(stackchan::FaceState::listening);
     face.setStatus("Listening");
   } else {

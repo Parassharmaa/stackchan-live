@@ -3,14 +3,18 @@ const coreUrl = (process.env.STACKCHAN_CORE_URL ?? "http://127.0.0.1:8765").repl
   "",
 );
 
-export async function coreRequest(path: string, init?: RequestInit): Promise<unknown> {
+export async function coreRequest(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = 5_000,
+): Promise<unknown> {
   const response = await fetch(`${coreUrl}${path}`, {
     ...init,
     headers: {
       "content-type": "application/json",
       ...init?.headers,
     },
-    signal: AbortSignal.timeout(5_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
     const detail = await response.text();
@@ -23,10 +27,12 @@ export async function deviceRequest(
   eveSessionId: string,
   path: string,
   init?: RequestInit,
+  timeoutMs = 5_000,
 ): Promise<unknown> {
   return coreRequest(
     `/v1/eve-sessions/${encodeURIComponent(eveSessionId)}/device${path}`,
     init,
+    timeoutMs,
   );
 }
 
@@ -38,5 +44,5 @@ export async function dispatchDeviceControl(
   return deviceRequest(eveSessionId, "/control", {
     method: "POST",
     body: JSON.stringify({ type, payload }),
-  });
+  }, 18_000);
 }

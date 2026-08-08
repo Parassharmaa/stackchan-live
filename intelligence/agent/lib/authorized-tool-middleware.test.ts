@@ -37,6 +37,54 @@ function params(
   } as LanguageModelV4CallOptions;
 }
 
+function toolLoopParams(
+  transcript: string,
+  completed: readonly string[],
+  physicalActionResults: readonly string[] = [],
+): LanguageModelV4CallOptions {
+  const tools = [
+    "move_head",
+    "set_lights",
+    "play_routine",
+    "capture_photo",
+    "load_skill",
+  ];
+  const content =
+    `<stackchan_turn_context_json>\n${JSON.stringify({
+      reply_language: "en",
+      physical_action_results: physicalActionResults,
+    })}\n</stackchan_turn_context_json>\n\n` + transcript;
+  const prompt: LanguageModelV4CallOptions["prompt"] = [
+    { role: "user", content: [{ type: "text", text: content }] },
+  ];
+  completed.forEach((name, index) => {
+    const toolCallId = `call-${index}`;
+    prompt.push({
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId, toolName: name, input: {} }],
+    });
+    prompt.push({
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId,
+          toolName: name,
+          output: { type: "json", value: { success: true } },
+        },
+      ],
+    });
+  });
+  return {
+    prompt,
+    tools: tools.map((name) => ({
+      type: "function" as const,
+      name,
+      inputSchema: { type: "object" },
+    })),
+  } as LanguageModelV4CallOptions;
+}
+
 test("semantic policy exposes only the one explicitly authorized tool", async () => {
   const middleware = authorizedToolMiddleware();
   const transformed = await middleware.transformParams!({
@@ -165,4 +213,78 @@ test("schedule creation requires an explicit tool command or complete natural bo
     completeNatural.tools?.map((tool) => (tool.type === "function" ? tool.name : "")),
     ["create_schedule"],
   );
+});
+
+test("one turn advances through multiple distinct tools and then returns to speech", async () => {
+  const middleware = authorizedToolMiddleware();
+  const transcript = "Use move_head, then set_lights, then play_routine now.";
+  const cases = [
+    [[], "move_head"],
+    [["move_head"], "set_lights"],
+    [["move_head", "set_lights"], "play_routine"],
+  ] as const;
+
+  for (const [completed, expected] of cases) {
+    const transformed = await middleware.transformParams!({
+      type: "stream",
+      params: toolLoopParams(transcript, completed),
+      model: {} as never,
+    });
+    assert.deepEqual(
+      transformed.tools?.map((tool) => (tool.type === "function" ? tool.name : "")),
+      [expected],
+    );
+    assert.deepEqual(transformed.toolChoice, { type: "tool", toolName: expected });
+  }
+
+  const finished = await middleware.transformParams!({
+    type: "stream",
+    params: toolLoopParams(transcript, ["move_head", "set_lights", "play_routine"]),
+    model: {} as never,
+  });
+  assert.deepEqual(finished.tools, []);
+  assert.deepEqual(finished.toolChoice, { type: "none" });
+});
+
+test("each Eve semantic step has a 2000 output-token ceiling", async () => {
+  const middleware = authorizedToolMiddleware();
+  const unconstrained = await middleware.transformParams!({
+    type: "stream",
+    params: toolLoopParams("Tell me about cats.", []),
+    model: {} as never,
+  });
+  assert.equal(unconstrained.maxOutputTokens, 2_000);
+
+  const alreadySmaller = toolLoopParams("Tell me about cats.", []);
+  alreadySmaller.maxOutputTokens = 800;
+  const preserved = await middleware.transformParams!({
+    type: "stream",
+    params: alreadySmaller,
+    model: {} as never,
+  });
+  assert.equal(preserved.maxOutputTokens, 800);
+});
+
+test("camera intent is automatic once but never duplicated after physical fast-path work", async () => {
+  const middleware = authorizedToolMiddleware();
+  const requested = await middleware.transformParams!({
+    type: "stream",
+    params: toolLoopParams("Look at this and tell me what it is.", []),
+    model: {} as never,
+  });
+  assert.deepEqual(
+    requested.tools?.map((tool) => (tool.type === "function" ? tool.name : "")),
+    ["capture_photo"],
+  );
+
+  const alreadyCaptured = await middleware.transformParams!({
+    type: "stream",
+    params: toolLoopParams("Look at this and tell me what it is.", [], [
+      "capture_photo physically completed: photo captured; a small printed object",
+    ]),
+    model: {} as never,
+  });
+  assert.deepEqual(alreadyCaptured.tools?.map((tool) => (tool.type === "function" ? tool.name : "")), [
+    "load_skill",
+  ]);
 });

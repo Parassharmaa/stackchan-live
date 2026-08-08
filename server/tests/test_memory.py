@@ -21,6 +21,17 @@ def test_memory_retrieves_english_and_japanese(tmp_path: Path) -> None:
     store.close()
 
 
+def test_generic_like_question_does_not_retrieve_unrelated_preference(
+    tmp_path: Path,
+) -> None:
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.remember("I like coffee", language="en", importance=0.8)
+
+    assert store.retrieve("I made an object. Would you like to see it?") == []
+    assert store.retrieve("Do I like coffee?")[0].content == "I like coffee"
+    store.close()
+
+
 def test_common_conversation_words_do_not_retrieve_unrelated_episodes(
     tmp_path: Path,
 ) -> None:

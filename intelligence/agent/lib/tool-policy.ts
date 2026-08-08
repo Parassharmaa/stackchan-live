@@ -58,6 +58,22 @@ const SAFE_FORCED_TOOL_RULES: readonly {
     matches: (transcript) => explicitToolCommand(transcript, "play_routine"),
   },
   {
+    name: "capture_photo",
+    matches: (transcript) =>
+      explicitToolCommand(transcript, "capture_photo") ||
+      /\b(?:take|capture|snap|shoot)\b.{0,24}\b(?:a |my |our )?(?:photo|picture|snapshot|selfie)\b/i.test(
+        transcript,
+      ) ||
+      /\b(?:look at|look over|check|inspect)\s+(?:this|that|it|me)\b/i.test(
+        transcript,
+      ) ||
+      /\bwhat(?:'s| is)\s+(?:this|that)\b/i.test(transcript) ||
+      /\bwhat\s+(?:am i|i am)\s+(?:holding|showing)\b/i.test(transcript) ||
+      /(?:写真を?撮って|写真を?撮影して|撮影して|自撮りして|(?:これ|それ|あれ)を?(?:見て|確認して|チェックして)|(?:これ|それ|あれ)(?:は)?(?:何|なに|どう見える))/.test(
+        transcript,
+      ),
+  },
+  {
     name: "create_schedule",
     matches: (transcript) =>
       explicitToolCommand(transcript, "create_schedule") ||
@@ -146,6 +162,7 @@ const NON_AUTHORIZING_CONTEXT = [
   /\bonce\b/i,
   /\bwhen\s+(?:i|we|you)\b/i,
   /\b(?:example|hypothetical|not\s+(?:a\s+)?request)\b/i,
+  /\b(?:is\s+the\s+phrase|means\s+something|shown\s+in\s+documentation|shown\s+in\s+(?:a\s+)?manual)\b/i,
   /(?:もし|場合|後(?:で|に)|もう一度|再び|例(?:えば)?|依頼では(?:ない|ありません)|命令では(?:ない|ありません))/,
 ];
 
@@ -153,11 +170,37 @@ export function selectAuthorizedToolForTranscript(
   transcript: string,
   available: ReadonlySet<string>,
 ): string | undefined {
+  return selectAuthorizedToolsForTranscript(transcript, available)[0];
+}
+
+function explicitToolSequence(
+  transcript: string,
+  available: ReadonlySet<string>,
+): string[] {
+  if (!/^(?:please\s+)?(?:use|call|run|invoke)\b/i.test(transcript)) {
+    return [];
+  }
+  return SAFE_FORCED_TOOL_RULES.flatMap((rule) => {
+    if (!available.has(rule.name)) return [];
+    const escaped = rule.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = new RegExp(`(?:^|[^\\w])${escaped}(?:[^\\w]|$)`, "i").exec(transcript);
+    return match === null ? [] : [{ name: rule.name, index: match.index }];
+  })
+    .sort((left, right) => left.index - right.index)
+    .map((item) => item.name);
+}
+
+export function selectAuthorizedToolsForTranscript(
+  transcript: string,
+  available: ReadonlySet<string>,
+): string[] {
   const normalized = transcript.trim();
   if (NON_AUTHORIZING_CONTEXT.some((pattern) => pattern.test(normalized))) {
-    return undefined;
+    return [];
   }
-  return SAFE_FORCED_TOOL_RULES.find(
+  const explicit = explicitToolSequence(normalized, available);
+  if (explicit.length > 0) return explicit;
+  return SAFE_FORCED_TOOL_RULES.filter(
     (rule) => available.has(rule.name) && rule.matches(normalized),
-  )?.name;
+  ).map((rule) => rule.name);
 }

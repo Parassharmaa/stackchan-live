@@ -176,7 +176,11 @@ class CascadePipeline:
             if self.memory_enabled and not approval_turn
             else []
         )
-        planned_tools = [] if approval_turn else plan_tools(transcript, language)
+        planned_tools = (
+            []
+            if approval_turn
+            else plan_tools(transcript, language, recent_turns=list(self._recent_turns))
+        )
         unsupported_actions = (
             [] if approval_turn else unsupported_action_feedback(transcript, language)
         )

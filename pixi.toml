@@ -123,6 +123,9 @@ cmd = "python scripts/benchmark_hil_sensor.py"
 [tasks.hil-sensor-interrupt]
 cmd = "python scripts/benchmark_hil_sensor_interrupt.py --output artifacts/benchmarks/hil-sensor-interrupt-latest.json"
 
+[tasks.hil-screen-double-tap]
+cmd = "python scripts/benchmark_hil_screen_double_tap.py --output artifacts/benchmarks/hil-screen-double-tap-latest.json"
+
 [tasks.hil-voice-benchmark]
 cmd = "python scripts/benchmark_hil_voice.py --output artifacts/benchmarks/hil-latest.json"
 
@@ -155,6 +158,9 @@ cmd = "python scripts/benchmark_hil_face_requests.py --output artifacts/benchmar
 
 [tasks.hil-camera]
 cmd = "python scripts/benchmark_hil_camera.py --output artifacts/benchmarks/hil-camera-latest.json"
+
+[tasks.hil-multitool]
+cmd = "python scripts/benchmark_hil_multitool.py --output artifacts/benchmarks/hil-multitool-latest.json"
 
 [tasks.hil-daily-routines]
 cmd = "python scripts/benchmark_hil_daily_routines.py --output artifacts/benchmarks/hil-daily-routines-latest.json"

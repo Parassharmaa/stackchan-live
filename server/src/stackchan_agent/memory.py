@@ -318,6 +318,7 @@ _ENGLISH_QUERY_STOPWORDS = {
     "in",
     "is",
     "it",
+    "like",
     "me",
     "my",
     "of",

@@ -866,6 +866,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     device_results: dict[str, deque[dict]] = {}
     device_captures: dict[str, dict] = {}
     eve_session_devices: dict[str, str] = {}
+    bound_control_waiters: dict[tuple[str, str], asyncio.Future[dict]] = {}
     motion_capture_guard_until: dict[str, float] = {}
     captures_dir = settings.trace_dir.parent / "captures"
     captures_dir.mkdir(parents=True, exist_ok=True)
@@ -1289,9 +1290,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/v1/eve-sessions/{session_id}/device/control")
     async def send_bound_device_control(
         session_id: str, message: ControlMessage, request: Request
-    ) -> dict[str, str]:
+    ) -> dict:
         require_loopback(request)
-        return await send_device_control(bound_device_id(session_id), message, request)
+        device_id = bound_device_id(session_id)
+        request_id = message.request_id or secrets.token_hex(16)
+        message.request_id = request_id
+        key = (device_id, request_id)
+        if key in bound_control_waiters:
+            raise HTTPException(status_code=409, detail="control request id is already pending")
+        result_future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
+        bound_control_waiters[key] = result_future
+        try:
+            dispatched = await send_device_control(device_id, message, request)
+            try:
+                terminal = await asyncio.wait_for(result_future, timeout=15.0)
+            except TimeoutError:
+                terminal = {
+                    "success": False,
+                    "stage": "timeout",
+                    "detail": "no correlated terminal firmware result",
+                }
+            return {
+                **dispatched,
+                "request_id": request_id,
+                "terminal_result": terminal,
+            }
+        finally:
+            bound_control_waiters.pop(key, None)
 
     @app.post("/v1/devices/{device_id}/control")
     async def send_device_control(
@@ -3322,7 +3347,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     turn_detector.reset()
                     await start_turn(audio)
                 elif command.type == "barge_in":
-                    await interrupt_playback("barge_in")
+                    await interrupt_playback(str(command.payload.get("reason", "barge_in")))
                 elif command.type == "audio.clear":
                     microphone.clear()
                     turn_detector.reset()
@@ -3567,6 +3592,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             pending = pending_tool_results.get(command.request_id)
                             if pending is not None and not pending.done():
                                 pending.set_result(observed_payload)
+                            bound_pending = bound_control_waiters.get(
+                                (device_id, command.request_id)
+                            ) if device_id else None
+                            if bound_pending is not None and not bound_pending.done():
+                                bound_pending.set_result(observed_payload)
                     if device_id:
                         if (
                             command.type == "telemetry"
@@ -3613,6 +3643,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if sensor_llm is not None:
                 await sensor_llm.aclose()
             if device_id and active_devices.get(device_id) is websocket:
+                for (bound_id, _), waiter in list(bound_control_waiters.items()):
+                    if bound_id == device_id and not waiter.done():
+                        waiter.set_result(
+                            {
+                                "success": False,
+                                "stage": "disconnected",
+                                "detail": "device disconnected before the terminal result",
+                            }
+                        )
                 active_devices.pop(device_id, None)
                 proactive_queues.pop(device_id, None)
                 device_info.pop(device_id, None)
