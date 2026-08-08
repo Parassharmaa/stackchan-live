@@ -11,7 +11,7 @@ from .memory import MemoryStore, SensitiveMemoryError, extract_explicit_memory
 from .protocol import AudioFlags, AudioFrame, AudioStream, ControlMessage, control
 from .providers import LLMProvider, STTProvider, TTSProvider, TurnContext
 from .telemetry import TraceRecorder
-from .tools import invoke_tool, plan_tools
+from .tools import invoke_tool, plan_tools, unsupported_action_feedback
 
 SERVER_PCM_BUDGET_FRAMES = 96
 OUTPUT_QUEUE_CAPACITY_ITEMS = 64
@@ -177,6 +177,10 @@ class CascadePipeline:
             else []
         )
         planned_tools = [] if approval_turn else plan_tools(transcript, language)
+        unsupported_actions = (
+            [] if approval_turn else unsupported_action_feedback(transcript, language)
+        )
+        action_results.extend(unsupported_actions)
         for planned in planned_tools:
             request_id = uuid.uuid4().hex
             command = await invoke_tool(planned.name, planned.arguments)
@@ -199,7 +203,10 @@ class CascadePipeline:
             # Device commands are already grounded by correlated firmware
             # results. Injecting old chat episodes here made Luna narrate about
             # coffee instead of acknowledging the physical action.
-            if self.memory_enabled and not approval_turn and not planned_tools
+            if self.memory_enabled
+            and not approval_turn
+            and not planned_tools
+            and not unsupported_actions
             else []
         )
         context = TurnContext(

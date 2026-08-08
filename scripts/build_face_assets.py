@@ -9,6 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_SHEET = (
     ROOT / "firmware/assets/source/original-robot-expression-sheet-v1.png"
 )
+DIRECT_FRAME_PATHS = {
+    "crying": ROOT / "firmware/assets/source/crying-face-v1.png",
+}
 OUTPUT_DIR = ROOT / "firmware/assets/faces"
 HEADER = ROOT / "firmware/include/generated/FaceAssets.hpp"
 SOURCE_CPP = ROOT / "firmware/src/generated/FaceAssets.cpp"
@@ -48,6 +51,11 @@ def build_frames() -> dict[str, Image.Image]:
         if frame.size != FRAME_SIZE:
             raise RuntimeError(f"invalid crop for {name}: {frame.size}")
         frames[name] = frame
+    for name, source in DIRECT_FRAME_PATHS.items():
+        frame = Image.open(source).convert("RGB")
+        if frame.size != FRAME_SIZE:
+            raise RuntimeError(f"invalid direct frame for {name}: {frame.size}")
+        frames[name] = frame
     return frames
 
 
@@ -64,7 +72,7 @@ def main() -> None:
     SOURCE_CPP.parent.mkdir(parents=True, exist_ok=True)
     frames = build_frames()
     assets: list[tuple[str, bytes]] = []
-    for name in FRAME_CELLS:
+    for name in frames:
         output = OUTPUT_DIR / f"{name}.png"
         frames[name].save(output, format="PNG", optimize=True)
         assets.append((name, output.read_bytes()))

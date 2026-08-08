@@ -7,14 +7,15 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from difflib import SequenceMatcher
+from pathlib import Path
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from .config import Settings
+from .config import PROJECT_ROOT, Settings
 from .echo import EchoCanceller
 from .eve_provider import EveLLM
 from .local_providers import (
@@ -24,10 +25,18 @@ from .local_providers import (
     WhisperTranscription,
 )
 from .memory import MemoryStore, SensitiveMemoryError
-from .music import signature_jingle
+from .music import music_duration_seconds, signature_jingle
 from .pipeline import CascadePipeline, meaningful_transcript, take_speakable_phrase
 from .processes import SupertonicServerProcess, WhisperServerProcess
-from .protocol import AudioFlags, AudioFrame, AudioStream, ControlMessage, control
+from .protocol import (
+    AudioFlags,
+    AudioFrame,
+    AudioStream,
+    ControlMessage,
+    ImageFormat,
+    ImageFrame,
+    control,
+)
 from .providers import MockLLM, MockSTT, MockTTS, TurnContext
 from .realtime import OpenAIRealtimePipeline
 from .telemetry import TraceRecorder
@@ -37,6 +46,7 @@ from .vad import (
     WebRtcSpeechGate,
     pcm16_rms,
 )
+from .vision import AppleVisionAnalyzer
 
 
 class RememberMemoryRequest(BaseModel):
@@ -84,6 +94,34 @@ def should_accept_head_gesture(
 ) -> bool:
     """Coalesce the multiple gesture labels produced by one physical pat."""
     return last_accepted_at <= 0 or now - last_accepted_at >= cooldown_seconds
+
+
+def motion_capture_is_guarded(
+    active_request_ids: set[str], *, now: float, guarded_until: float
+) -> bool:
+    """Suppress servo acoustics for the measured motion, not only its requested duration."""
+    return bool(active_request_ids) or now < guarded_until
+
+
+def motion_capture_allows_speech_start(
+    active_request_ids: set[str],
+    *,
+    guarded: bool,
+    clean_rms: float,
+    minimum_rms: float,
+    voice_frame: bool,
+) -> bool:
+    """Require voiced high-energy evidence after motion; never listen during motion."""
+    if active_request_ids:
+        return False
+    return not guarded or (clean_rms >= minimum_rms and voice_frame)
+
+
+def ordinary_capture_allows_speech_start(
+    *, turn_active: bool, motion_allows_start: bool
+) -> bool:
+    """Do not let a background VAD edge replace a turn while its reply is pending."""
+    return not turn_active and motion_allows_start
 
 
 def merge_audio_without_overlap(prefix: bytes, audio: bytes, *, frame_bytes: int = 640) -> bytes:
@@ -760,8 +798,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     active_devices: dict[str, WebSocket] = {}
     device_info: dict[str, dict] = {}
     device_results: dict[str, deque[dict]] = {}
+    device_captures: dict[str, dict] = {}
     eve_session_devices: dict[str, str] = {}
     motion_capture_guard_until: dict[str, float] = {}
+    captures_dir = settings.trace_dir.parent / "captures"
+    captures_dir.mkdir(parents=True, exist_ok=True)
+    vision_analyzer = AppleVisionAnalyzer(
+        PROJECT_ROOT / "scripts/apple_vision.swift",
+        settings.trace_dir.parent / "bin/stackchan-vision",
+    )
 
     def results_for(device_id: str) -> deque[dict]:
         return device_results.setdefault(device_id, deque(maxlen=200))
@@ -776,6 +821,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "curious": 2100,
                 "comfort": 2300,
                 "dance": 2500,
+                "wake_up": 2300,
+                "focus": 1900,
+                "good_night": 2100,
             }.get(str(message.payload.get("name", "greet")), 2500)
         else:
             return
@@ -997,6 +1045,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_loopback(request)
         return {"results": list(device_results.get(device_id, ()))}
 
+    @app.get("/v1/devices/{device_id}/captures/latest")
+    async def latest_device_capture(device_id: str, request: Request) -> FileResponse:
+        require_loopback(request)
+        capture = device_captures.get(device_id)
+        if capture is None:
+            raise HTTPException(status_code=404, detail="no camera capture is available")
+        return FileResponse(
+            capture["path"],
+            media_type="image/jpeg",
+            filename=Path(capture["path"]).name,
+        )
+
+    @app.get("/v1/devices/{device_id}/captures")
+    async def get_device_capture_metadata(device_id: str, request: Request) -> dict:
+        require_loopback(request)
+        capture = device_captures.get(device_id)
+        if capture is None:
+            raise HTTPException(status_code=404, detail="no camera capture is available")
+        return {"capture": {key: value for key, value in capture.items() if key != "path"}}
+
     @app.post("/v1/eve-sessions/{session_id}")
     async def bind_eve_session(
         session_id: str, body: EveSessionBindingRequest, request: Request
@@ -1046,6 +1114,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "motion.set",
             "motion.diagnose",
             "routine.play",
+            "camera.capture",
             "playback.flush",
             "capture.commit",
         }:
@@ -1158,6 +1227,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         device_playback_ended_at = 0.0
         send_lock = asyncio.Lock()
         pending_tool_results: dict[str, asyncio.Future[dict]] = {}
+        active_motion_request_ids: set[str] = set()
 
         def pause_playback_stream() -> None:
             nonlocal playback_pause_started
@@ -1176,7 +1246,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async def send_text(message: str) -> None:
             if device_id:
                 try:
-                    extend_motion_capture_guard(device_id, ControlMessage.decode(message))
+                    outgoing = ControlMessage.decode(message)
+                    extend_motion_capture_guard(device_id, outgoing)
+                    if (
+                        outgoing.request_id
+                        and outgoing.type in {"motion.set", "routine.play"}
+                    ):
+                        active_motion_request_ids.add(outgoing.request_id)
                 except (TypeError, ValueError):
                     pass
             async with send_lock:
@@ -1923,6 +1999,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "lights.set",
                             "motion.set",
                             "routine.play",
+                            "camera.capture",
                         }:
                             tool_future = loop.create_future()
                             pending_tool_results[request_id] = tool_future
@@ -1949,6 +2026,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                         "component": "routine_music",
                                         "name": routine,
                                         "frames": len(music_frames),
+                                        "duration_ms": round(
+                                            music_duration_seconds(routine) * 1_000
+                                        ),
                                         "received_monotonic_ns": time.perf_counter_ns(),
                                     }
                                 )
@@ -2194,6 +2274,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 "component": "routine_music",
                                 "name": reaction["routine"],
                                 "frames": len(music_frames),
+                                "duration_ms": round(
+                                    music_duration_seconds(str(reaction["routine"])) * 1_000
+                                ),
                                 "received_monotonic_ns": time.perf_counter_ns(),
                             }
                         )
@@ -2369,7 +2452,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if not authenticated:
                         await websocket.close(code=1008, reason="pairing required")
                         break
-                    frame = AudioFrame.decode(message["bytes"])
+                    binary = message["bytes"]
+                    if binary.startswith(b"STKI"):
+                        image = ImageFrame.decode(binary)
+                        if image.format != ImageFormat.JPEG or not (
+                            image.data.startswith(b"\xff\xd8")
+                            and image.data.endswith(b"\xff\xd9")
+                        ):
+                            await send_text(
+                                control(
+                                    "error",
+                                    code="invalid_camera_frame",
+                                    request_id=image.request_id,
+                                ).encode()
+                            )
+                            continue
+                        safe_device = re.sub(r"[^A-Za-z0-9_-]", "-", device_id or "device")
+                        captured_ns = time.time_ns()
+                        capture_path = captures_dir / (
+                            f"{safe_device}-{captured_ns}-{image.request_id}.jpg"
+                        )
+                        capture_path.write_bytes(image.data)
+                        vision = await vision_analyzer.analyze(capture_path)
+                        capture = {
+                            "request_id": image.request_id,
+                            "width": image.width,
+                            "height": image.height,
+                            "format": "jpeg",
+                            "bytes": len(image.data),
+                            "captured_unix_ns": captured_ns,
+                            "vision": vision,
+                            "path": str(capture_path),
+                        }
+                        if device_id:
+                            device_captures[device_id] = capture
+                            results_for(device_id).append(
+                                {
+                                    "type": "telemetry",
+                                    "component": "camera_capture",
+                                    **{
+                                        key: value
+                                        for key, value in capture.items()
+                                        if key != "path"
+                                    },
+                                    "artifact": str(
+                                        capture_path.relative_to(settings.trace_dir.parent)
+                                    ),
+                                    "received_monotonic_ns": time.perf_counter_ns(),
+                                }
+                            )
+                        continue
+                    frame = AudioFrame.decode(binary)
                     if frame.stream != AudioStream.MICROPHONE:
                         error = control("error", code="wrong_audio_stream")
                         await send_text(error.encode())
@@ -2430,12 +2563,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             > settings.barge_in_confirmation_timeout_ms * 1_000_000
                         ):
                             await reject_voice_barge_candidate("confirmation_timeout")
-                        motion_guarded = bool(
-                            device_id and loop_now < motion_capture_guard_until.get(device_id, 0.0)
+                        motion_guarded = motion_capture_is_guarded(
+                            active_motion_request_ids,
+                            now=loop_now,
+                            guarded_until=(
+                                motion_capture_guard_until.get(device_id, 0.0)
+                                if device_id
+                                else 0.0
+                            ),
                         )
-                        motion_voice_strong = (
-                            not motion_guarded
-                            or pcm16_rms(clean_pcm) >= settings.motion_vad_start_rms
+                        motion_voice_strong = motion_capture_allows_speech_start(
+                            active_motion_request_ids,
+                            guarded=motion_guarded,
+                            clean_rms=pcm16_rms(clean_pcm),
+                            minimum_rms=settings.motion_vad_start_rms,
+                            voice_frame=speech_gate(clean_pcm),
                         )
                         if voice_barge_started_ns:
                             # Preserve raw candidate audio for the bilingual
@@ -2620,7 +2762,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             # Keep receiving microphone frames while Whisper
                             # runs; the completed task is consumed above.
                             continue
-                        allow_speech_start = motion_voice_strong
+                        allow_speech_start = ordinary_capture_allows_speech_start(
+                            turn_active=bool(turn_task and not turn_task.done()),
+                            motion_allows_start=motion_voice_strong,
+                        )
                         if speaking:
                             playback_age_ms = (
                                 asyncio.get_running_loop().time() - playback_started_at
@@ -2963,11 +3108,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             }
                         )
                 elif command.type in {"tool.result", "telemetry"}:
+                    observed_payload = dict(command.payload)
+                    if (
+                        command.type == "tool.result"
+                        and command.request_id
+                        and device_id
+                        and command.payload.get("tool") == "capture_photo"
+                    ):
+                        capture = device_captures.get(device_id)
+                        if capture and capture.get("request_id") == command.request_id:
+                            vision = capture.get("vision")
+                            if isinstance(vision, dict) and vision.get("summary"):
+                                observed_payload["vision"] = vision
+                                observed_payload["detail"] = (
+                                    f"{observed_payload.get('detail', 'photo captured')}; "
+                                    f"{vision['summary']}"
+                                )
                     if command.type == "tool.result" and command.request_id:
-                        if tool_result_is_terminal(command.payload):
+                        if tool_result_is_terminal(observed_payload):
+                            if command.request_id in active_motion_request_ids:
+                                active_motion_request_ids.discard(command.request_id)
+                                if device_id:
+                                    motion_capture_guard_until[device_id] = max(
+                                        motion_capture_guard_until.get(device_id, 0.0),
+                                        asyncio.get_running_loop().time()
+                                        + settings.motion_capture_tail_ms / 1_000,
+                                    )
                             pending = pending_tool_results.get(command.request_id)
                             if pending is not None and not pending.done():
-                                pending.set_result(dict(command.payload))
+                                pending.set_result(observed_payload)
                     if device_id:
                         if (
                             command.type == "telemetry"
@@ -2984,7 +3153,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     {"request_id": command.request_id} if command.request_id else {}
                                 ),
                                 "received_monotonic_ns": time.perf_counter_ns(),
-                                **command.payload,
+                                **observed_payload,
                             }
                         )
                 else:

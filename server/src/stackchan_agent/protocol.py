@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 MAGIC = b"STKA"
 PROTOCOL_VERSION = 1
 _HEADER = struct.Struct("<4sBBHII")
+_IMAGE_HEADER = struct.Struct("<4sBBHH32s")
 
 
 class AudioStream(IntEnum):
@@ -20,6 +21,55 @@ class AudioFlags(IntFlag):
     START = 1
     END = 2
     CANCELLED = 4
+
+
+class ImageFormat(IntEnum):
+    JPEG = 1
+
+
+class ImageFrame(BaseModel):
+    """One correlated camera still from the physical device."""
+
+    request_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    width: int = Field(gt=0, le=4096)
+    height: int = Field(gt=0, le=4096)
+    format: ImageFormat = ImageFormat.JPEG
+    data: bytes = Field(min_length=1, max_length=2_000_000)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def encode(self) -> bytes:
+        return _IMAGE_HEADER.pack(
+            b"STKI",
+            PROTOCOL_VERSION,
+            int(self.format),
+            self.width,
+            self.height,
+            self.request_id.encode("ascii"),
+        ) + self.data
+
+    @classmethod
+    def decode(cls, payload: bytes) -> "ImageFrame":
+        if len(payload) <= _IMAGE_HEADER.size:
+            raise ValueError("image frame is shorter than its header")
+        magic, version, image_format, width, height, request_id = _IMAGE_HEADER.unpack_from(
+            payload
+        )
+        if magic != b"STKI":
+            raise ValueError("invalid image frame magic")
+        if version != PROTOCOL_VERSION:
+            raise ValueError(f"unsupported image protocol version: {version}")
+        try:
+            decoded_request_id = request_id.decode("ascii")
+        except UnicodeDecodeError as error:
+            raise ValueError("image request id is not ASCII") from error
+        return cls(
+            request_id=decoded_request_id,
+            width=width,
+            height=height,
+            format=ImageFormat(image_format),
+            data=payload[_IMAGE_HEADER.size :],
+        )
 
 
 class AudioFrame(BaseModel):

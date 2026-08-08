@@ -6,6 +6,7 @@ namespace stackchan {
 
 constexpr uint8_t kProtocolVersion = 1;
 constexpr size_t kAudioHeaderSize = 16;
+constexpr size_t kImageRequestIdSize = 32;
 
 enum class AudioStream : uint8_t {
   microphone = 1,
@@ -28,7 +29,21 @@ struct __attribute__((packed)) AudioHeader {
   uint32_t timestamp_ms;
 };
 
+enum class ImageFormat : uint8_t {
+  jpeg = 1,
+};
+
+struct __attribute__((packed)) ImageHeader {
+  char magic[4];
+  uint8_t version;
+  uint8_t format;
+  uint16_t width;
+  uint16_t height;
+  char request_id[kImageRequestIdSize];
+};
+
 static_assert(sizeof(AudioHeader) == kAudioHeaderSize);
+static_assert(sizeof(ImageHeader) == 42);
 
 inline bool validAudioHeader(const uint8_t* payload, size_t length) {
   if (length < sizeof(AudioHeader)) return false;

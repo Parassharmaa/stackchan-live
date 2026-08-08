@@ -9,8 +9,18 @@ from .protocol import ControlMessage, control
 
 
 class FaceArgs(BaseModel):
-    state: str = "idle"
-    emotion: str = "neutral"
+    state: Literal["idle", "listening", "thinking", "speaking", "sleepy"] = "idle"
+    emotion: Literal[
+        "neutral",
+        "happy",
+        "excited",
+        "curious",
+        "surprised",
+        "sad",
+        "crying",
+        "sleepy",
+        "love",
+    ] = "neutral"
     intensity: float = Field(default=0.5, ge=0, le=1)
 
 
@@ -29,9 +39,22 @@ class LightArgs(BaseModel):
 
 
 class RoutineArgs(BaseModel):
-    name: Literal["greet", "celebrate", "curious", "comfort", "dance"]
+    name: Literal[
+        "greet",
+        "celebrate",
+        "curious",
+        "comfort",
+        "dance",
+        "wake_up",
+        "focus",
+        "good_night",
+    ]
     intensity: float = Field(default=0.7, ge=0.2, le=1)
     music: bool = False
+
+
+class CapturePhotoArgs(BaseModel):
+    quality: int = Field(default=70, ge=40, le=85)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +92,11 @@ async def _routine(args: BaseModel) -> ControlMessage:
     return control("routine.play", **parsed.model_dump())
 
 
+async def _capture_photo(args: BaseModel) -> ControlMessage:
+    parsed = CapturePhotoArgs.model_validate(args)
+    return control("camera.capture", **parsed.model_dump())
+
+
 TOOLS: dict[str, Tool] = {
     "set_face": Tool("set_face", "Set semantic face state and emotion.", FaceArgs, _face),
     "move_head": Tool("move_head", "Move head within enforced safety limits.", MotionArgs, _motion),
@@ -79,7 +107,91 @@ TOOLS: dict[str, Tool] = {
         RoutineArgs,
         _routine,
     ),
+    "capture_photo": Tool(
+        "capture_photo",
+        (
+            "Capture one privacy-visible still for an explicit photo or visual-inspection "
+            "request about the user. The caller must wait for the correlated capture and "
+            "local-vision result before describing what is visible."
+        ),
+        CapturePhotoArgs,
+        _capture_photo,
+    ),
 }
+
+
+def _face_command_requested(text: str, language: str) -> bool:
+    if language == "ja":
+        return bool(
+            re.search(r"(?:顔|表情).*(?:して|見せて|なって|にして)", text)
+            or re.search(
+                r"(?:笑顔|泣き顔|泣いて(?:いる|る)顔|涙の顔|悲しそう|眠そう|不思議そう)"
+                r".*(?:して|見せて|なって)",
+                text,
+            )
+        )
+    return bool(
+        re.search(
+            r"^(?:please\s+)?(?:can|could|would|will)\s+you\s+(?:please\s+)?"
+            r"(?:make|show|do|put on|wear|look)\b.*\b(?:face|expression|smile|sad|"
+            r"happy|excited|surprised|surprising|shocked|sleepy|tired|loving|neutral|"
+            r"crying)\b",
+            text,
+        )
+        or re.search(
+            r"^(?:please\s+)?(?:make|show|do|put on|wear)\b.*\b(?:face|expression)\b",
+            text,
+        )
+        or re.search(
+            r"^(?:please\s+)?look\s+(?:sad|happy|excited|surprised|surprising|"
+            r"shocked|sleepy|tired|loving|neutral|crying)\b",
+            text,
+        )
+        or re.fullmatch(r"\s*(?:please\s+)?smile[.!?\s]*", text)
+    )
+
+
+def _explicit_visual_inspection_requested(text: str, language: str) -> bool:
+    """Recognize consent-bearing requests for Stack-chan to look at the user.
+
+    These phrases authorize one visible still. Generic capability or scene
+    questions remain non-capturing so the camera cannot activate by implication.
+    """
+    if language == "ja":
+        return any(
+            phrase in text
+            for phrase in (
+                "私を見て",
+                "僕を見て",
+                "わたしを見て",
+                "私どう見える",
+                "私はどう見える",
+                "今日の私どう",
+                "今日の私はどう",
+                "私の見た目",
+                "僕の見た目",
+                "私の服装",
+                "僕の服装",
+                "私の髪型",
+                "僕の髪型",
+            )
+        )
+    return bool(
+        re.search(r"\blook\s+at\s+me\b", text)
+        or re.search(r"\bhow\s+(?:do\s+i|am\s+i)\s+look(?:ing)?\b", text)
+        or re.search(r"\bwhat\s+do\s+i\s+look\s+like\b", text)
+        or re.search(
+            r"\bhow\s+does\s+my\s+(?:outfit|hair|hairstyle|face|shirt|jacket|dress)\s+look\b",
+            text,
+        )
+        or re.search(r"\b(?:can|could|would)\s+you\s+(?:please\s+)?(?:look\s+at|see)\s+me\b", text)
+    )
+
+
+def unsupported_action_feedback(transcript: str, language: str) -> list[str]:
+    """Return grounding for recognized but unavailable device actions."""
+    del transcript, language
+    return []
 
 
 async def invoke_tool(name: str, arguments: dict[str, Any]) -> ControlMessage:
@@ -99,8 +211,97 @@ def plan_tools(transcript: str, language: str) -> list[PlannedTool]:
     is_japanese = language == "ja"
     plans: list[PlannedTool] = []
 
+    explicit_photo_request = bool(
+        re.search(
+            r"\b(?:take|capture|snap|shoot)\b.{0,24}\b(?:a |my |our )?"
+            r"(?:photo|picture|snapshot|selfie)\b",
+            text,
+        )
+        or re.fullmatch(r"\s*(?:photo|picture|selfie)[.!?\s]*", text)
+        or any(
+            phrase in text
+            for phrase in (
+                "写真を撮って",
+                "写真撮って",
+                "写真を撮影して",
+                "撮影して",
+                "自撮りして",
+            )
+        )
+        or _explicit_visual_inspection_requested(text, language)
+    )
+    if explicit_photo_request:
+        plans.append(
+            PlannedTool(
+                "move_head",
+                {"yaw_deg": 0.0, "pitch_deg": 45.0, "duration_ms": 550},
+                (
+                    "撮影用に頭を正面へ向けました"
+                    if is_japanese
+                    else "the head physically moved into the photo pose"
+                ),
+            )
+        )
+        plans.append(
+            PlannedTool(
+                "capture_photo",
+                {"quality": 70},
+                (
+                    "本体カメラで写真を撮影しました"
+                    if is_japanese
+                    else "the onboard camera physically captured a photo"
+                ),
+            )
+        )
+
+    face_emotions = (
+        (
+            "crying",
+            (
+                r"\b(?:crying|tearful)\b",
+                "泣き顔",
+                "泣いている顔",
+                "泣いてる顔",
+                "涙の顔",
+            ),
+            0.95,
+        ),
+        ("sad", (r"\b(?:sad|unhappy|worried)\b", "悲しい", "悲しそう", "心配そう"), 0.85),
+        ("happy", (r"\b(?:happy|smiling|cheerful)\b", r"\bsmile\b", "嬉しい", "笑顔"), 0.9),
+        ("excited", (r"\bexcited\b", "わくわく", "興奮"), 0.9),
+        (
+            "surprised",
+            (r"\b(?:surprised|surprising|shocked)\b", "驚いた", "びっくり"),
+            0.9,
+        ),
+        ("sleepy", (r"\b(?:sleepy|tired)\b", "眠そう", "眠い"), 0.75),
+        ("love", (r"\b(?:loving|love|adoring)\b", "大好き", "愛情"), 1.0),
+        ("neutral", (r"\bneutral\b", "普通の顔", "真顔"), 0.5),
+    )
+    if _face_command_requested(text, language):
+        for emotion, patterns, intensity in face_emotions:
+            if any(re.search(pattern, text) for pattern in patterns):
+                plans.append(
+                    PlannedTool(
+                        "set_face",
+                        {"state": "idle", "emotion": emotion, "intensity": intensity},
+                        (
+                            f"{emotion}の表情が本体で完了しました"
+                            if is_japanese
+                            else f"the {emotion} face physically completed"
+                        ),
+                    )
+                )
+                break
+
     english_music_command = bool(
         re.search(r"\b(?:play|start|put on|make)\b.{0,24}\bmusic\b", text)
+        or re.search(
+            r"\b(?:play|start|sing)\b.{0,24}\b(?:a )?"
+            r"(?:song|tune|melody|beat|fanfare|chiptune|lo-?fi)\b",
+            text,
+        )
+        or re.search(r"\b(?:play|make)\b.{0,24}\b(?:longer|long)\b.{0,12}\bmusic\b", text)
         or re.search(
             r"(?:^|\bplease\b|\bstack(?:-| )?chan\b[,. ]*)\s*(?:dance|do a dance)\b",
             text,
@@ -116,8 +317,67 @@ def plan_tools(transcript: str, language: str) -> list[PlannedTool]:
             "音楽かけ",
             "音楽を流",
             "音楽を再生",
+            "曲をかけ",
+            "曲を流",
+            "歌って",
+            "長い音楽",
+            "ファンファーレ",
+            "チップチューン",
+            "ローファイ",
+            "落ち着く曲",
+            "癒やしの曲",
+            "集中用の曲",
+            "目覚ましの曲",
         )
     )
+    lullaby_command = bool(
+        re.search(r"\b(?:play|sing)\b.{0,16}\b(?:a )?lullaby\b", text)
+        or "子守唄" in text
+    )
+    bedtime_music_command = bool(
+        lullaby_command
+        or (
+            (re.search(r"\b(?:bedtime|good ?night)\b", text) or "おやすみ" in text)
+            and (english_music_command or japanese_music_command)
+        )
+    )
+    music_requested = english_music_command or japanese_music_command
+    music_style_routine: str | None = None
+    if bedtime_music_command:
+        music_style_routine = "good_night"
+    elif music_requested:
+        style_patterns = (
+            ("celebrate", (r"\b(?:fanfare|victory|celebration)\b", "ファンファーレ", "お祝いの曲")),
+            (
+                "comfort",
+                (
+                    r"\b(?:calm|relaxing|gentle|soft)\b",
+                    "落ち着く",
+                    "癒やし",
+                    "穏やか",
+                    "リラックス",
+                ),
+            ),
+            ("focus", (r"\b(?:focus|lo-?fi|concentration)\b", "集中", "ローファイ")),
+            ("wake_up", (r"\b(?:morning|wake[ -]?up|sunrise)\b", "朝の曲", "目覚まし")),
+            (
+                "dance",
+                (
+                    r"\b(?:chiptune|upbeat|dance|energetic)\b",
+                    "チップチューン",
+                    "アップテンポ",
+                    "ダンス",
+                ),
+            ),
+        )
+        music_style_routine = next(
+            (
+                routine
+                for routine, patterns in style_patterns
+                if any(re.search(pattern, text) for pattern in patterns)
+            ),
+            "dance",
+        )
     # Physical routines need an imperative or a first-person emotional request.
     # Topic mentions such as "I wonder..." or "she is sad" stay conversational.
     routine_patterns = (
@@ -151,6 +411,7 @@ def plan_tools(transcript: str, language: str) -> list[PlannedTool]:
             (
                 r"\bshow me (?:a )?curious (?:face|expression)\b",
                 r"\blook curious\b",
+                r"\bmake (?:a |your )?curious (?:face|expression)\b",
                 r"\bdo (?:a |your )?curious (?:face|routine)\b",
                 "不思議そうな顔して",
                 "興味津々な顔して",
@@ -162,23 +423,57 @@ def plan_tools(transcript: str, language: str) -> list[PlannedTool]:
             (r"\bgreet (?:me|us|them)\b", r"\bsay hello\b", r"\bwave hello\b", "挨拶して"),
             False,
         ),
+        (
+            "wake_up",
+            (
+                r"(?:^|[.!?]\s*)good morning[.!?\s]*$",
+                r"\b(?:do (?:a |your )?)?wake[ -]?up routine\b",
+                r"\bwake up,? stack(?:-| )?chan\b",
+                "おはよう",
+                "起きて",
+                "目を覚まして",
+            ),
+            False,
+        ),
+        (
+            "focus",
+            (
+                r"\b(?:start|enter|do) focus mode\b",
+                r"\blet(?:'s| us) (?:focus|concentrate)\b",
+                r"\bhelp me focus\b",
+                "集中モード",
+                "集中しよう",
+                "集中させて",
+            ),
+            False,
+        ),
+        (
+            "good_night",
+            (
+                r"(?:^|[.!?]\s*)good ?night[.!?\s]*$",
+                r"\b(?:start|do) (?:a |your )?(?:bedtime|good ?night) routine\b",
+                r"\btime for bed\b",
+                "おやすみ",
+                "寝る時間",
+            ),
+            False,
+        ),
     )
     for routine, patterns, music in routine_patterns:
-        matched = (
-            english_music_command or japanese_music_command
-            if routine == "dance"
-            else any(re.search(pattern, text) for pattern in patterns)
-        )
+        style_matched = music_style_routine == routine
+        matched = style_matched or any(re.search(pattern, text) for pattern in patterns)
         if matched:
+            routine_music = music or style_matched
             plans.append(
                 PlannedTool(
                     "play_routine",
-                    {"name": routine, "intensity": 0.75, "music": music},
+                    {"name": routine, "intensity": 0.75, "music": routine_music},
                     (
                         f"{routine}ルーティンを開始するよう依頼しました"
-                        + ("（音楽付き）" if music else "")
+                        + ("（音楽付き）" if routine_music else "")
                         if is_japanese
-                        else f"accepted {routine} routine" + (" with music" if music else "")
+                        else f"accepted {routine} routine"
+                        + (" with music" if routine_music else "")
                     ),
                 )
             )

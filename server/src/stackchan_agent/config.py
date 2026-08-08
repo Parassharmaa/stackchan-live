@@ -209,7 +209,7 @@ class Settings(BaseSettings):
     # a known motion window, retain barge-in for a nearby speaker but require a
     # stronger clean signal than ordinary turn start.
     motion_vad_start_rms: int = 1100
-    motion_capture_tail_ms: int = 350
+    motion_capture_tail_ms: int = 1_000
     supertonic_cli: Path = PROJECT_ROOT / ".pixi/envs/default/bin/supertonic"
     supertonic_host: str = "127.0.0.1"
     supertonic_port: int = 7788

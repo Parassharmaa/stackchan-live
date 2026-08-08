@@ -9,7 +9,17 @@ export default defineTool({
   inputSchema: z.object({
     state: z.enum(["idle", "listening", "thinking", "speaking", "sleepy"]).default("idle"),
     emotion: z
-      .enum(["neutral", "happy", "excited", "curious", "surprised", "sad", "sleepy", "love"])
+      .enum([
+        "neutral",
+        "happy",
+        "excited",
+        "curious",
+        "surprised",
+        "sad",
+        "crying",
+        "sleepy",
+        "love",
+      ])
       .default("neutral"),
     intensity: z.number().min(0).max(1).default(0.7),
   }),

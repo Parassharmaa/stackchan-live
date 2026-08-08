@@ -704,3 +704,36 @@ The raster face renderer is exercised on the physical display path, including
 cached speaking frames, but the automated HIL suite has no camera or framebuffer
 oracle. Expression alignment and cuteness therefore remain a manual visual QA
 claim rather than an automated pixel-level assertion.
+
+## Camera still and daily-routine HIL (2026-08-08)
+
+`hil-camera-latest.json` passed the complete acoustic camera path for “Look at
+me and tell me how I'm looking today.” Stack-chan centered its head, captured
+and transferred a valid 3,941-byte 320x240 JPEG, restored its shared
+camera/light/head-sensor control bus, and waited for laptop-local Vision before
+speaking. The latest frame had no confident scene label, so the grounded reply
+said it could not reliably judge the user's appearance; an earlier run of the
+same flow detected one face and used that evidence. Head-sensor read failures,
+playback drops, and starvation all remained at zero.
+
+`hil-daily-routines-latest.json` passed all eight presets by direct physical
+telemetry and five acoustic English/Japanese requests: long dance music,
+wake-up, focus, bedtime, and Japanese bedtime music. Every expected servo target reached terminal feedback,
+every LED frame completed, every physical reply started and drained, and the
+run added zero playback drops or starvation events. The music catalog now
+contains original 4.8-second celebration/wake-up pieces, a 6.72-second dance,
+and a 7.04-second bedtime mini-song, all frame-aligned to the observable 24 kHz
+queue.
+
+`hil-music-styles-latest.json` passed six acoustic style requests: English
+victory fanfare, chiptune dance, and sunrise; Japanese gentle music, lo-fi focus,
+and bedtime music. Each selected a distinct composition/routine pair, met its
+4.8-7.04 second duration contract, completed servo and LED feedback, isolated
+unrelated memory, and added zero playback drops or starvation.
+
+`hil-face-requests-latest.json` passed five boot-44 acoustic expression cases:
+English sad, the natural “surprising” alias, Japanese sad, English crying, and
+Japanese crying. Every supported emotion returned a correlated terminal device
+success and remained held after its spoken response. Both crying requests
+selected the new tear sprite rather than the sad fallback; all five replies
+started and drained with zero playback drops or starvation.

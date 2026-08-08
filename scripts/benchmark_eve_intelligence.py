@@ -8,6 +8,7 @@ import re
 import statistics
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from stackchan_agent.eve_provider import EveLLM, visual_only_glyph
 from stackchan_agent.providers import TurnContext
 
 BENCHMARK_FAILURES = (RuntimeError, TimeoutError, httpx.HTTPError, ValueError, KeyError)
+WORKFLOW_DURABILITY_MARKERS = ("REPLAY_DIVERGENCE", "CORRUPTED_EVENT_LOG")
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,48 @@ class Scenario:
     minimum_chars: int
     required_any: tuple[str, ...] = ()
     forbidden: tuple[str, ...] = ()
+
+
+def _log_files(log_sources: Path | Iterable[Path]) -> list[Path]:
+    sources = (log_sources,) if isinstance(log_sources, Path) else tuple(log_sources)
+    files: set[Path] = set()
+    for source in sources:
+        if source.is_dir():
+            files.update(path for path in source.glob("*.log") if path.is_file())
+        elif source.is_file():
+            files.add(source)
+    return sorted(files)
+
+
+def snapshot_log_offsets(log_sources: Path | Iterable[Path]) -> dict[Path, int]:
+    """Record log boundaries so historical failures do not poison a new run."""
+    return {path: path.stat().st_size for path in _log_files(log_sources)}
+
+
+def new_workflow_durability_events(
+    log_sources: Path | Iterable[Path], offsets: dict[Path, int]
+) -> list[dict[str, str]]:
+    """Return only replay/corruption events appended during this benchmark."""
+    events: list[dict[str, str]] = []
+    for path in _log_files(log_sources):
+        with path.open("rb") as handle:
+            handle.seek(min(offsets.get(path, 0), path.stat().st_size))
+            appended = handle.read().decode("utf-8", "replace")
+        for line in appended.splitlines():
+            marker = next(
+                (candidate for candidate in WORKFLOW_DURABILITY_MARKERS if candidate in line),
+                None,
+            )
+            if marker is None:
+                continue
+            at = ""
+            try:
+                payload = json.loads(line)
+                at = str(payload.get("at", ""))
+            except json.JSONDecodeError:
+                pass
+            events.append({"marker": marker, "at": at, "log": path.name})
+    return events
 
 
 SCENARIOS = (
@@ -388,7 +432,13 @@ async def capture_contract_check(awaitable) -> dict:
         }
 
 
-async def run(base_url: str, core_url: str, output: Path) -> dict:
+async def run(
+    base_url: str,
+    core_url: str,
+    output: Path,
+    eve_logs: tuple[Path, ...],
+) -> dict:
+    log_offsets = snapshot_log_offsets(eve_logs)
     async with httpx.AsyncClient(timeout=5.0) as client:
         info_response = await client.get(f"{base_url.rstrip('/')}/eve/v1/info")
         info_response.raise_for_status()
@@ -483,6 +533,14 @@ async def run(base_url: str, core_url: str, output: Path) -> dict:
             check_eve_device_tools(base_url, core_url)
         ),
     }
+    # Allow the sidecar logger to flush failures from the final durable reset.
+    await asyncio.sleep(0.25)
+    durability_events = new_workflow_durability_events(eve_logs, log_offsets)
+    contract_checks["workflow_durability"] = {
+        "passed": not durability_events,
+        "new_failure_count": len(durability_events),
+        "events": durability_events,
+    }
     first_tokens = [item["first_token_ms"] for item in results if item["first_token_ms"]]
     contract_passed = all(item["passed"] for item in contract_checks.values())
     report = {
@@ -516,8 +574,28 @@ def main() -> None:
     parser.add_argument(
         "--output", type=Path, default=Path("artifacts/benchmarks/eve-intelligence-latest.json")
     )
+    parser.add_argument(
+        "--eve-log",
+        action="append",
+        type=Path,
+        help="Eve log file or directory to watch; repeat for multiple sources",
+    )
+    parser.add_argument(
+        "--eve-log-dir",
+        action="append",
+        type=Path,
+        default=[],
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
-    report = asyncio.run(run(args.base_url, args.core_url, args.output))
+    eve_logs = tuple(
+        args.eve_log
+        or (
+            Path("intelligence/.eve/logs"),
+            Path("artifacts/logs/eve.log"),
+        )
+    ) + tuple(args.eve_log_dir)
+    report = asyncio.run(run(args.base_url, args.core_url, args.output, eve_logs))
     print(args.output)
     print(
         f"{report['model']}: quality={report['quality_pass_rate']:.0%}, "

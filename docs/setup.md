@@ -124,11 +124,21 @@ pixi run hil-recent-regressions
 pixi run hil-no-false-barge
 pixi run hil-sensor
 pixi run hil-routine-music
+pixi run hil-music-styles
+pixi run hil-camera
+pixi run hil-daily-routines
+pixi run hil-face-requests
 ```
 
-The HIL tasks can move the servos, illuminate body LEDs, and play audio. Keep the
+The HIL tasks can move the servos, illuminate body LEDs, play audio, and capture
+one locally stored camera still. Keep the
 robot on a clear surface and do not force a powered servo by hand. Vertical
 motion is constrained to the hardware-safe 5-85 degree range.
+
+Camera captures require an explicit photo command, use a visible white-light
+cue, and are stored only in ignored `artifacts/captures/`. On macOS, the server
+automatically compiles the included local Vision helper when scene analysis is
+needed; no camera image is sent to Eve or a cloud vision model.
 
 Repeatable far-field voice interruption is still experimental and has been
 deferred. Do not use `hil-voice-benchmark` as an unattended pass/fail gate yet.

@@ -9,7 +9,7 @@ intelligence tools, context compaction, and the future MCP connection catalog.
 This avoids putting a workflow runtime in the audio loop or replacing the custom
 ESP firmware.
 
-Eve is currently a preview, so the pinned `0.31.1` package is treated as a
+Eve is currently a preview, so the pinned `0.31.3` package is treated as a
 replaceable adapter rather than a protocol dependency of the firmware:
 
 - https://vercel.com/blog/introducing-eve
@@ -46,8 +46,9 @@ store survives reconnect and remains listable and deletable.
 
 ## Current capability and security boundary
 
-Always-on behavior is in `intelligence/agent/instructions.md`. Three skills cover
-bilingual conversation, expressive embodiment, and memory hygiene. Ten typed
+Always-on behavior is in `intelligence/agent/instructions.md`. Six skills cover
+bilingual conversation, expressive embodiment, memory hygiene, music moods,
+privacy-bounded ambient awareness, and safe daily rhythms. Ten typed
 tools provide durable memory operations, connected-device status, and bounded
 face, head, light, and coordinated-routine requests through loopback-only Python
 endpoints. Latency-critical direct commands still take the deterministic Python

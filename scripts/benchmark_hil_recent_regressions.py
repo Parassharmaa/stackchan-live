@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay the exact recent head/light phrases against physical Stack-chan."""
+"""Replay exact recent face/head/light phrases against physical Stack-chan."""
 
 import argparse
 import asyncio
@@ -10,6 +10,7 @@ from benchmark_hil_capabilities import VOICE_ACTIONS, fetch_json, run_voice_acti
 from benchmark_hil_voice import audible_fixture_output
 
 REGRESSION_CASES = {
+    "english_sad_face_recent_regression",
     "english_head_towards_left_recent_regression",
     "english_blink_lights_recent_regression",
 }

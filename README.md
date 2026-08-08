@@ -7,11 +7,13 @@ or vendor UI.
 The project provides:
 
 - custom ESP32-S3 firmware with an animated face, head motion, lights, audio,
-  and top-touch input;
+  top-touch input, and privacy-visible camera stills for photo and direct
+  “look at me” requests;
 - laptop-local Whisper STT, Supertonic TTS, audio scheduling, and SQLite memory;
 - Vercel Eve intelligence with bilingual conversation, skills, and typed tools;
 - pluggable cascade and OpenAI Realtime speech-to-speech providers;
-- reproducible software and hardware-in-the-loop benchmarks.
+- eight coordinated expression routines, six original music styles, and
+  reproducible software and hardware-in-the-loop benchmarks.
 
 > Physical voice interruption remains experimental. Current evidence and known
 > limits are tracked in [the completion audit](docs/completion-audit.md).

@@ -1,6 +1,13 @@
 import pytest
 
-from stackchan_agent.protocol import AudioFlags, AudioFrame, AudioStream, ControlMessage
+from stackchan_agent.protocol import (
+    AudioFlags,
+    AudioFrame,
+    AudioStream,
+    ControlMessage,
+    ImageFormat,
+    ImageFrame,
+)
 
 
 def test_audio_frame_round_trip() -> None:
@@ -29,3 +36,27 @@ def test_control_accepts_flat_payload_for_firmware_convenience() -> None:
     decoded = ControlMessage.decode('{"type":"barge_in","at_ms":123}')
     assert decoded.type == "barge_in"
     assert decoded.payload == {"at_ms": 123}
+
+
+def test_image_frame_round_trip() -> None:
+    original = ImageFrame(
+        request_id="0123456789abcdef0123456789abcdef",
+        width=320,
+        height=240,
+        format=ImageFormat.JPEG,
+        data=b"\xff\xd8camera\xff\xd9",
+    )
+
+    assert ImageFrame.decode(original.encode()) == original
+
+
+def test_image_frame_rejects_invalid_magic() -> None:
+    original = ImageFrame(
+        request_id="0123456789abcdef0123456789abcdef",
+        width=320,
+        height=240,
+        data=b"jpeg",
+    ).encode()
+
+    with pytest.raises(ValueError, match="magic"):
+        ImageFrame.decode(b"NOPE" + original[4:])

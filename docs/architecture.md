@@ -2,7 +2,9 @@
 
 ## Product boundary
 
-The ESP32-S3 is a realtime face, motion, light, sensor, and audio endpoint. The Mac owns acoustic processing, speech inference, agent reasoning, memory, tools, observability, and model routing.
+The ESP32-S3 is a realtime face, motion, light, sensor, camera-still, and audio
+endpoint. The Mac owns acoustic processing, speech and vision inference, agent
+reasoning, memory, tools, observability, and model routing.
 
 This keeps secrets and large models off the robot, makes model upgrades independent of firmware, and leaves the device responsive when the agent is busy.
 
@@ -80,17 +82,37 @@ presented as successful physical execution. This hybrid boundary prevents a
 language model or a future MCP server from bypassing motion limits or claiming
 unobserved hardware success.
 
-The five coordinated routines (`greet`, `celebrate`, `curious`, `comfort`, and
-`dance`) combine semantic face state, bounded RGB animation, guarded head
-targets, and an optional short signature jingle. Jingles use the same paced PCM
-lane and AEC playback reference as speech instead of an unobservable firmware
-sound path.
+The eight coordinated routines (`greet`, `celebrate`, `curious`, `comfort`,
+`dance`, `wake_up`, `focus`, and `good_night`) combine semantic face state,
+bounded RGB animation, guarded head targets, and optional original music. The
+longer dance, celebration, wake-up, and lullaby mini-songs use the same paced
+PCM lane and AEC playback reference as speech instead of an unobservable
+firmware sound path, so cancellation and transport telemetry stay consistent.
 
 The presets are intentionally distinct: warm pink greeting, rainbow
-celebration, blue curious tilt, amber comfort bow, and magenta rainbow dance.
-Each has a different safe target and an original synthesized musical stinger;
-music is generated on the Mac and follows the same observable 24 kHz playback
-path as speech.
+celebration, blue curious tilt, amber comfort bow, magenta rainbow dance, orange
+sunrise wake-up, low-cyan focus, and dim-purple bedtime. Each has different safe
+motion. Six longer music styles map onto those coordinated presets: fanfare,
+chiptune dance, sunrise, gentle waltz, lo-fi focus, and lullaby. Music is
+synthesized on the Mac and follows the same observable 24 kHz playback path as
+speech.
+
+## Camera path
+
+The onboard GC0308 is an explicit still-photo tool rather than an always-on
+video feed. A photo request or direct visual-inspection request such as “how am
+I looking?” runs a correlated sequence: Stack-chan centers its head, shows a
+visible capture cue, captures one 320x240 JPEG, transfers it in a correlated
+binary frame, waits for local Vision, and only then answers. Ambiguous scene
+questions do not activate the camera. Camera control and the head sensor share
+an internal bus, so firmware
+releases and restores that bus around capture and rearms touch recognition to
+avoid a false interruption edge. The Mac validates and stores the JPEG under
+ignored `artifacts/captures/`, then uses local macOS Vision for conservative
+labels, face count, and text. Low-confidence scenes are reported as unknown
+instead of guessed. Continuous video is intentionally deferred because it
+would compete with the realtime voice transport and has a materially different
+privacy contract.
 
 ## Verified hardware contract
 
@@ -128,6 +150,11 @@ frequently changing speech frames are decoded into PSRAM once at boot, avoiding
 PNG decompression stalls in the audio/WebSocket loop. Semantic expression
 changes are direct because every frame shares the same shell geometry and eye
 baseline; there is no forced blink transition between emotions.
+
+The crying expression is a separate aligned raster, not an alias for sad: it
+retains the worried brows and downturned mouth while adding two high-contrast
+pale-cyan tear streams. English `crying face` and Japanese `泣いている顔` route
+to the same correlated physical `crying` emotion.
 
 ## Memory
 

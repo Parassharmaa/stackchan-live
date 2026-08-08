@@ -29,7 +29,7 @@ bilingual far-field quality pass.
 
 ## Eve intelligence and historical local models
 
-Eve 0.31.1 is the default intelligence layer and remains separate from the
+Eve 0.31.3 is the default intelligence layer and remains separate from the
 realtime Python audio server. It adds connection-scoped multi-turn sessions, context
 compaction, Markdown instructions and skills, typed memory tools, cancellation,
 and an allowlist-oriented MCP connection point. Shell, filesystem, arbitrary

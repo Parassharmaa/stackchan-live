@@ -141,8 +141,12 @@ void FaceRenderer::draw(uint32_t now_ms) {
 
   if (emotion_ == "petted") {
     select(11, faces::petted_png, faces::petted_png_len);
-  } else if (emotion_ == "playful") {
+  } else if (emotion_ == "crying") {
+    select(13, faces::crying_png, faces::crying_png_len);
+  } else if (emotion_ == "playful" || emotion_ == "excited") {
     select(10, faces::playful_png, faces::playful_png_len);
+  } else if (emotion_ == "love") {
+    select(11, faces::petted_png, faces::petted_png_len);
   } else if (emotion_ == "worried" || emotion_ == "sad" || state_ == FaceState::error ||
              state_ == FaceState::disconnected) {
     select(9, faces::worried_png, faces::worried_png_len);
@@ -152,6 +156,8 @@ void FaceRenderer::draw(uint32_t now_ms) {
     select(7, faces::shy_png, faces::shy_png_len);
   } else if (emotion_ == "surprised") {
     select(5, faces::surprised_png, faces::surprised_png_len);
+  } else if (emotion_ == "curious") {
+    select(3, faces::thinking_png, faces::thinking_png_len);
   } else if (state_ == FaceState::speaking) {
     const bool can_change = now_ms - speech_variant_changed_ms_ >= kSpeechVariantHoldMs;
     if (can_change) {

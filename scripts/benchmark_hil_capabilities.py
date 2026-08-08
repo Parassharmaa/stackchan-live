@@ -59,9 +59,20 @@ ROUTINE_STEPS = {
     "curious": 4,
     "comfort": 4,
     "dance": 5,
+    "wake_up": 4,
+    "focus": 3,
+    "good_night": 3,
 }
 
 VOICE_ACTIONS = (
+    {
+        "name": "english_sad_face_recent_regression",
+        "voice": "Samantha",
+        "prompt": "Can you make a sad face?",
+        "tool": "set_face",
+        "intent_terms": ("sad", "face"),
+        "expected_emotion": "sad",
+    },
     {
         "name": "english_head_towards_left_recent_regression",
         "voice": "Samantha",
@@ -132,6 +143,102 @@ VOICE_ACTIONS = (
         "tool": "play_routine",
         "routine": "dance",
         "music": True,
+        "min_music_duration_ms": 6_000,
+    },
+    {
+        "name": "english_wake_up",
+        "voice": "Samantha",
+        "prompt": "Good morning!",
+        "tool": "play_routine",
+        "routine": "wake_up",
+        "intent_terms": ("morning",),
+    },
+    {
+        "name": "japanese_focus",
+        "voice": "Kyoko",
+        "prompt": "集中モードにしてください。",
+        "tool": "play_routine",
+        "routine": "focus",
+        "intent_terms": ("集中",),
+    },
+    {
+        "name": "english_good_night",
+        "voice": "Samantha",
+        "prompt": "Good night.",
+        "tool": "play_routine",
+        "routine": "good_night",
+        "intent_terms": ("night",),
+    },
+    {
+        "name": "japanese_bedtime_music",
+        "voice": "Kyoko",
+        "prompt": "おやすみの音楽を流してください。",
+        "tool": "play_routine",
+        "routine": "good_night",
+        "music": True,
+        "min_music_duration_ms": 6_000,
+        "intent_terms": ("おやすみ", "音楽"),
+    },
+    {
+        "name": "english_victory_fanfare",
+        "voice": "Samantha",
+        "prompt": "Play a victory fanfare.",
+        "tool": "play_routine",
+        "routine": "celebrate",
+        "music": True,
+        "min_music_duration_ms": 4_500,
+        "intent_terms": ("fanfare",),
+    },
+    {
+        "name": "english_chiptune_dance",
+        "voice": "Samantha",
+        "prompt": "Play an upbeat chiptune.",
+        "tool": "play_routine",
+        "routine": "dance",
+        "music": True,
+        "min_music_duration_ms": 6_000,
+        # Whisper can normalize chiptune as the equivalent "chit-tune".
+        "intent_terms": ("upbeat", "tune"),
+    },
+    {
+        "name": "english_sunrise_music",
+        "voice": "Samantha",
+        "prompt": "Play a sunrise song.",
+        "tool": "play_routine",
+        "routine": "wake_up",
+        "music": True,
+        "min_music_duration_ms": 4_500,
+        "intent_terms": ("sunrise",),
+    },
+    {
+        "name": "japanese_gentle_music",
+        "voice": "Kyoko",
+        "prompt": "リラックスできる音楽を流してください。",
+        "tool": "play_routine",
+        "routine": "comfort",
+        "music": True,
+        "min_music_duration_ms": 5_500,
+        "intent_terms": ("リラックス", "音楽"),
+    },
+    {
+        "name": "japanese_lofi_focus_music",
+        "voice": "Kyoko",
+        "prompt": "ローファイの集中用の曲を流してください。",
+        "tool": "play_routine",
+        "routine": "focus",
+        "music": True,
+        "min_music_duration_ms": 6_000,
+        "intent_terms": ("集中", "曲"),
+    },
+    {
+        "name": "japanese_lullaby_music",
+        "voice": "Kyoko",
+        "prompt": "おやすみの音楽を流してください。",
+        "tool": "play_routine",
+        "routine": "good_night",
+        "music": True,
+        "min_music_duration_ms": 6_000,
+        "intent_terms": ("おやすみ", "音楽"),
     },
 )
 
@@ -361,6 +468,11 @@ async def wait_for_voice_action(
         )
         if tool_done and response_done:
             await wait_for_device_idle(base_url, device_id, stable_s=0.6, timeout_s=8)
+            current = [
+                item
+                for item in await asyncio.to_thread(device_results, base_url, device_id)
+                if item.get("received_monotonic_ns", 0) >= started_ns
+            ]
             return current, new_trace_events(offsets)
         await asyncio.sleep(0.15)
     return current, events
@@ -425,7 +537,11 @@ async def run_voice_actions(
             else starvations
         )
         music_ok = not case.get("music") or any(
-            item.get("component") == "routine_music" for item in current
+            item.get("component") == "routine_music"
+            and item.get("name") == case.get("routine")
+            and int(item.get("duration_ms", 0))
+            >= int(case.get("min_music_duration_ms", 1))
+            for item in current
         )
         intent_ok = all(
             any(term.casefold() in transcript.casefold() for transcript in transcripts)
@@ -444,11 +560,25 @@ async def run_voice_actions(
             and item.get("pitch_error_raw", 999) <= 24
             for item in tool_results
         )
+        face_request_ok = case["tool"] != "set_face" or (
+            any(
+                item.get("stage") == "completed"
+                and item.get("success") is True
+                and item.get("emotion") == case.get("expected_emotion")
+                for item in tool_results
+            )
+            and any(
+                item.get("component") == "face_hold"
+                and item.get("emotion") == case.get("expected_emotion")
+                for item in current
+            )
+        )
         passed = bool(
             transcripts
             and intent_ok
             and motion_request_ok
             and motion_feedback_ok
+            and face_request_ok
             and any(
                 item.get("stage") == "completed" and item.get("success") is True
                 for item in tool_results
@@ -479,6 +609,7 @@ async def run_voice_actions(
                 "intent_verified": intent_ok,
                 "motion_request_verified": motion_request_ok,
                 "motion_feedback_verified": motion_feedback_ok,
+                "face_request_and_post_playback_hold_verified": face_request_ok,
                 "music_verified": music_ok,
                 "newly_dropped_playback_frames": new_drops,
                 "new_playback_starvation_events": new_starvations,
@@ -595,7 +726,7 @@ async def run_suite(args: argparse.Namespace) -> dict:
     report["categories"]["direct_motion"] = await run_direct_motion(
         args.base_url, device_id
     )
-    announce("all five coordinated routines")
+    announce("all eight coordinated routines")
     report["categories"]["direct_routines"] = await run_direct_routines(
         args.base_url, device_id
     )

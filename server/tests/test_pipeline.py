@@ -21,7 +21,7 @@ from stackchan_agent.providers import (
     TurnContext,
 )
 from stackchan_agent.telemetry import TraceRecorder
-from stackchan_agent.tools import plan_tools
+from stackchan_agent.tools import plan_tools, unsupported_action_feedback
 
 
 class FastSentenceLLM(LLMProvider):
@@ -482,6 +482,146 @@ def test_device_tool_planner_rejects_non_command_mentions() -> None:
     assert plan_tools("Stack-chan, celebrate with me", "en")[0].name == "play_routine"
     assert plan_tools("Show me a curious expression", "en")[0].name == "play_routine"
     assert plan_tools("音楽をかけて", "ja")[0].name == "play_routine"
+    assert plan_tools("Please play a longer song", "en")[0].arguments == {
+        "name": "dance",
+        "intensity": 0.75,
+        "music": True,
+    }
+    assert plan_tools("もう少し長い音楽を流して", "ja")[0].arguments == {
+        "name": "dance",
+        "intensity": 0.75,
+        "music": True,
+    }
+    assert plan_tools("おやすみの音楽を流してください", "ja")[0].arguments == {
+        "name": "good_night",
+        "intensity": 0.75,
+        "music": True,
+    }
+    assert plan_tools("Please play bedtime music", "en")[0].arguments == {
+        "name": "good_night",
+        "intensity": 0.75,
+        "music": True,
+    }
+
+
+def test_six_bilingual_music_styles_route_to_distinct_embodied_presets() -> None:
+    cases = (
+        ("Play a victory fanfare.", "en", "celebrate"),
+        ("Play an upbeat chiptune.", "en", "dance"),
+        ("Play a sunrise song.", "en", "wake_up"),
+        ("Play some gentle relaxing music.", "en", "comfort"),
+        ("Play lo-fi focus music.", "en", "focus"),
+        ("Play a lullaby.", "en", "good_night"),
+        ("ファンファーレを流して。", "ja", "celebrate"),
+        ("ローファイの集中用の曲を流して。", "ja", "focus"),
+        ("落ち着く曲をかけて。", "ja", "comfort"),
+        ("リラックスできる音楽を流して。", "ja", "comfort"),
+        ("子守唄を歌って。", "ja", "good_night"),
+    )
+    for transcript, language, routine in cases:
+        planned = plan_tools(transcript, language)
+        assert [(item.name, item.arguments) for item in planned] == [
+            (
+                "play_routine",
+                {"name": routine, "intensity": 0.75, "music": True},
+            )
+        ]
+
+
+def test_natural_face_commands_use_the_fast_correlated_device_lane() -> None:
+    english = plan_tools("Can you make a sad face?", "en")
+    japanese = plan_tools("悲しい顔を見せて", "ja")
+    surprising = plan_tools("Can you make a surprising face?", "en")
+
+    assert len(english) == 1
+    assert english[0].name == "set_face"
+    assert english[0].arguments == {
+        "state": "idle",
+        "emotion": "sad",
+        "intensity": 0.85,
+    }
+    assert len(japanese) == 1
+    assert japanese[0].name == "set_face"
+    assert japanese[0].arguments["emotion"] == "sad"
+    assert surprising[0].arguments["emotion"] == "surprised"
+
+
+def test_explicit_bilingual_photo_requests_use_the_camera_lane() -> None:
+    english = plan_tools("Please take a photo of me.", "en")
+    japanese = plan_tools("写真を撮ってください。", "ja")
+
+    assert [(item.name, item.arguments) for item in english] == [
+        ("move_head", {"yaw_deg": 0.0, "pitch_deg": 45.0, "duration_ms": 550}),
+        ("capture_photo", {"quality": 70}),
+    ]
+    assert [(item.name, item.arguments) for item in japanese] == [
+        ("move_head", {"yaw_deg": 0.0, "pitch_deg": 45.0, "duration_ms": 550}),
+        ("capture_photo", {"quality": 70}),
+    ]
+
+
+def test_visual_inspection_requests_run_the_correlated_multistep_camera_lane() -> None:
+    cases = (
+        ("Look at me and tell me how I'm looking today.", "en"),
+        ("How am I looking today?", "en"),
+        ("What do I look like?", "en"),
+        ("私を見て、今日の私はどう見える？", "ja"),
+        ("私の服装はどう？", "ja"),
+    )
+
+    for transcript, language in cases:
+        planned = plan_tools(transcript, language)
+        assert [(item.name, item.arguments) for item in planned] == [
+            ("move_head", {"yaw_deg": 0.0, "pitch_deg": 45.0, "duration_ms": 550}),
+            ("capture_photo", {"quality": 70}),
+        ]
+
+
+def test_bilingual_daily_routines_use_distinct_embodied_presets() -> None:
+    cases = (
+        ("Good morning!", "en", "wake_up", False),
+        ("Let's focus.", "en", "focus", False),
+        ("Good night.", "en", "good_night", False),
+        ("Please play a lullaby.", "en", "good_night", True),
+        ("おはよう。", "ja", "wake_up", False),
+        ("集中モードにして。", "ja", "focus", False),
+        ("おやすみ。", "ja", "good_night", False),
+    )
+
+    for transcript, language, routine, music in cases:
+        planned = plan_tools(transcript, language)
+        assert [(item.name, item.arguments) for item in planned] == [
+            (
+                "play_routine",
+                {"name": routine, "intensity": 0.75, "music": music},
+            )
+        ]
+
+
+def test_camera_lane_requires_an_explicit_capture_request() -> None:
+    assert plan_tools("Do you have a camera?", "en") == []
+    assert plan_tools("What can you see?", "en") == []
+    assert plan_tools("What does this room look like?", "en") == []
+    assert plan_tools("カメラはありますか？", "ja") == []
+
+
+def test_bilingual_crying_face_uses_the_real_device_expression() -> None:
+    english = plan_tools("Can you make a crying face?", "en")
+    japanese = plan_tools("泣いている顔を見せて", "ja")
+
+    assert english[0].arguments == {
+        "state": "idle",
+        "emotion": "crying",
+        "intensity": 0.95,
+    }
+    assert japanese[0].arguments == english[0].arguments
+    assert unsupported_action_feedback("Can you make a crying face?", "en") == []
+
+
+def test_face_planner_does_not_turn_emotion_mentions_into_device_actions() -> None:
+    assert plan_tools("She is sad about the weather", "en") == []
+    assert plan_tools("Why do people look sad in that movie?", "en") == []
+    assert plan_tools("悲しい顔の絵について教えて", "ja") == []
 
 
 def test_non_speech_transcripts_are_rejected() -> None:

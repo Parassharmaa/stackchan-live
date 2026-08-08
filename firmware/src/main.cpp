@@ -5,12 +5,15 @@
 #include <WebSocketsClient.h>
 #include <WiFi.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 #include <mbedtls/md.h>
 
 #include <cstring>
 #include <iterator>
 
 #include "AudioEndpoint.hpp"
+#include "CameraEndpoint.hpp"
+#include "DeviceProtocol.hpp"
 #include "FaceRenderer.hpp"
 #include "HeadTouchSensor.hpp"
 #include "LightController.hpp"
@@ -41,6 +44,7 @@ namespace {
 WebSocketsClient socket_client;
 stackchan::FaceRenderer face(M5.Display);
 stackchan::AudioEndpoint audio(socket_client);
+stackchan::CameraEndpoint camera;
 stackchan::HeadTouchSensor head_touch;
 stackchan::LightController lights;
 stackchan::MotionController motion;
@@ -60,11 +64,35 @@ uint8_t head_sensor_release_samples = 0;
 uint32_t head_interrupt_contact_started_ms = 0;
 bool head_interrupt_latched = false;
 uint32_t approval_waiting_until_ms = 0;
+bool held_face_active = false;
+String held_face_state = "idle";
+String held_face_emotion = "neutral";
+float held_face_intensity = 0.5f;
 
 constexpr uint32_t kHeadSensorPlaybackGuardMs = 500;
 constexpr uint32_t kHeadSensorMotionGuardMs = 1000;
 constexpr uint8_t kHeadSensorRearmSamples = 8;
 constexpr uint32_t kHeadInterruptHoldMs = 700;
+
+void clearHeldFace() { held_face_active = false; }
+
+void applyHeldFace() {
+  if (!held_face_active) return;
+  face.setState(stackchan::faceStateFromString(held_face_state));
+  face.setEmotion(held_face_emotion, held_face_intensity);
+  face.setStatus(held_face_emotion);
+  if (server_connected) {
+    JsonDocument document;
+    document["type"] = "telemetry";
+    document["payload"]["component"] = "face_hold";
+    document["payload"]["state"] = held_face_state;
+    document["payload"]["emotion"] = held_face_emotion;
+    document["payload"]["intensity"] = held_face_intensity;
+    String output;
+    serializeJson(document, output);
+    socket_client.sendTXT(output);
+  }
+}
 
 bool flushAudioWithSensorGuard() {
   const bool was_active = audio.playbackActive();
@@ -92,6 +120,13 @@ constexpr RoutineMotionStep kComfortMotion[] = {
 constexpr RoutineMotionStep kDanceMotion[] = {
     {-24.0f, 32.0f, 380}, {24.0f, 52.0f, 380}, {-20.0f, 48.0f, 380},
     {20.0f, 30.0f, 380}, {0.0f, 45.0f, 480}};
+constexpr RoutineMotionStep kWakeUpMotion[] = {
+    {0.0f, 65.0f, 450}, {-8.0f, 52.0f, 380}, {8.0f, 40.0f, 380},
+    {0.0f, 38.0f, 480}};
+constexpr RoutineMotionStep kFocusMotion[] = {
+    {0.0f, 45.0f, 450}, {-5.0f, 40.0f, 360}, {0.0f, 40.0f, 450}};
+constexpr RoutineMotionStep kGoodNightMotion[] = {
+    {8.0f, 50.0f, 450}, {-8.0f, 56.0f, 450}, {0.0f, 60.0f, 520}};
 
 const RoutineMotionStep* active_routine_steps = nullptr;
 size_t active_routine_step_count = 0;
@@ -100,6 +135,17 @@ String active_routine_name;
 String active_routine_request_id;
 String active_motion_request_id;
 bool active_routine_light_written = true;
+
+bool validRequestId(const String& request_id) {
+  if (request_id.length() != stackchan::kImageRequestIdSize) return false;
+  for (size_t index = 0; index < request_id.length(); ++index) {
+    const char value = request_id[index];
+    if (!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f'))) {
+      return false;
+    }
+  }
+  return true;
+}
 
 uint32_t incrementPersistentBootCount() {
   Preferences preferences;
@@ -245,6 +291,8 @@ void sendAuthenticatedHello(const String& server_nonce) {
   hello["payload"]["motion_verified"] = motion.verified();
   hello["payload"]["head_sensor_present"] = head_touch.present();
   hello["payload"]["head_sensor_ready"] = head_touch.ready();
+  hello["payload"]["camera_present"] = true;
+  hello["payload"]["camera_mode"] = "explicit_still";
   String output;
   serializeJson(hello, output);
   socket_client.sendTXT(output);
@@ -360,6 +408,85 @@ void sendLightResult(int red, int green, int blue, float brightness,
   socket_client.sendTXT(output);
 }
 
+void sendCameraResult(bool success, const String& detail, const String& request_id,
+                      uint16_t width = 0, uint16_t height = 0,
+                      size_t bytes = 0, bool control_bus_restored = false) {
+  if (!server_connected) return;
+  JsonDocument document;
+  document["type"] = "tool.result";
+  if (!request_id.isEmpty()) document["request_id"] = request_id;
+  document["payload"]["tool"] = "capture_photo";
+  document["payload"]["stage"] = success ? "completed" : "failed";
+  document["payload"]["success"] = success;
+  document["payload"]["detail"] = detail;
+  document["payload"]["format"] = "jpeg";
+  document["payload"]["width"] = width;
+  document["payload"]["height"] = height;
+  document["payload"]["bytes"] = bytes;
+  document["payload"]["control_bus_restored"] = control_bus_restored;
+  String output;
+  serializeJson(document, output);
+  socket_client.sendTXT(output);
+}
+
+void captureAndSendPhoto(uint8_t quality, const String& request_id) {
+  lights.set(255, 255, 255, 0.28f, stackchan::LightAnimation::twinkle);
+  face.setState(stackchan::FaceState::thinking);
+  face.setEmotion("curious", 0.9f);
+  face.setStatus("Camera");
+
+  stackchan::CameraCapture capture = camera.capture(quality);
+  bool sent = false;
+  if (capture.jpeg != nullptr && capture.length > 0 &&
+      capture.control_bus_restored) {
+    const size_t packet_length = sizeof(stackchan::ImageHeader) + capture.length;
+    auto* packet = static_cast<uint8_t*>(
+        heap_caps_malloc(packet_length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (packet == nullptr) packet = static_cast<uint8_t*>(malloc(packet_length));
+    if (packet != nullptr) {
+      stackchan::ImageHeader header{{'S', 'T', 'K', 'I'},
+                                    stackchan::kProtocolVersion,
+                                    static_cast<uint8_t>(stackchan::ImageFormat::jpeg),
+                                    capture.width,
+                                    capture.height,
+                                    {}};
+      memcpy(header.request_id, request_id.c_str(), stackchan::kImageRequestIdSize);
+      memcpy(packet, &header, sizeof(header));
+      memcpy(packet + sizeof(header), capture.jpeg, capture.length);
+      sent = socket_client.sendBIN(packet, packet_length);
+      free(packet);
+    } else {
+      capture.error = "camera packet allocation failed";
+    }
+  }
+  const uint16_t width = capture.width;
+  const uint16_t height = capture.height;
+  const size_t bytes = capture.length;
+  const bool restored = capture.control_bus_restored;
+  String detail = capture.error;
+  capture.release();
+  // Releasing and reacquiring the shared I2C bus can transiently read all
+  // capacitive channels as active. Require physical release samples before
+  // this state is ever eligible to interrupt the following spoken reply.
+  head_touch.resetGesture();
+  head_sensor_rearm_pending = true;
+  head_sensor_release_samples = 0;
+  head_interrupt_contact_started_ms = 0;
+  head_interrupt_latched = false;
+  if (sent) {
+    detail = "onboard camera still captured and transferred";
+  } else if (detail.isEmpty()) {
+    detail = "camera transfer failed";
+  }
+  if (restored) {
+    lights.set(255, 105, 145, 0.08f, stackchan::LightAnimation::solid);
+  }
+  face.setState(sent ? stackchan::FaceState::happy : stackchan::FaceState::error);
+  face.setEmotion(sent ? "joy" : "worried", sent ? 0.8f : 0.7f);
+  face.setStatus(sent ? "Photo captured" : "Camera failed");
+  sendCameraResult(sent, detail, request_id, width, height, bytes, restored);
+}
+
 void sendRoutineMotionResult(const char* stage, bool success, const char* detail,
                              int step = -1,
                              const stackchan::MotionCompletion* completion = nullptr) {
@@ -423,6 +550,15 @@ bool startRoutineMotion(const String& routine, const String& request_id) {
   } else if (routine == "dance") {
     active_routine_steps = kDanceMotion;
     active_routine_step_count = std::size(kDanceMotion);
+  } else if (routine == "wake_up") {
+    active_routine_steps = kWakeUpMotion;
+    active_routine_step_count = std::size(kWakeUpMotion);
+  } else if (routine == "focus") {
+    active_routine_steps = kFocusMotion;
+    active_routine_step_count = std::size(kFocusMotion);
+  } else if (routine == "good_night") {
+    active_routine_steps = kGoodNightMotion;
+    active_routine_step_count = std::size(kGoodNightMotion);
   } else {
     active_routine_steps = kGreetMotion;
     active_routine_step_count = std::size(kGreetMotion);
@@ -513,6 +649,7 @@ void handleControl(const uint8_t* payload, size_t length) {
     return;
   } else if (type == "session.state") {
     const String state = body["state"] | "idle";
+    if (state == "thinking" || state == "listening") clearHeldFace();
     if (state == "idle" || state == "thinking") {
       approval_waiting_until_ms = 0;
     }
@@ -534,6 +671,7 @@ void handleControl(const uint8_t* payload, size_t length) {
       lights.set(255, 150, 20, 0.24f, stackchan::LightAnimation::pulse);
     } else if (state == "idle") {
       lights.set(255, 105, 145, 0.08f, stackchan::LightAnimation::solid);
+      if (!audio.playbackActive()) applyHeldFace();
     }
   } else if (type == "approval.requested") {
     const float timeout_seconds = constrain(
@@ -550,6 +688,10 @@ void handleControl(const uint8_t* payload, size_t length) {
     const float intensity = body["intensity"] | 0.5f;
     face.setState(stackchan::faceStateFromString(state));
     face.setEmotion(emotion, intensity);
+    held_face_active = true;
+    held_face_state = state;
+    held_face_emotion = emotion;
+    held_face_intensity = intensity;
     sendFaceResult(state, emotion, intensity, request_id);
   } else if (type == "lights.set") {
     const int red = body["red"] | 0;
@@ -597,6 +739,15 @@ void handleControl(const uint8_t* payload, size_t length) {
     } else if (routine == "dance") {
       light_written =
           lights.set(255, 40, 180, 0.32f, stackchan::LightAnimation::rainbow);
+    } else if (routine == "wake_up") {
+      light_written =
+          lights.set(255, 155, 45, 0.26f, stackchan::LightAnimation::pulse);
+    } else if (routine == "focus") {
+      light_written =
+          lights.set(30, 190, 220, 0.14f, stackchan::LightAnimation::solid);
+    } else if (routine == "good_night") {
+      light_written =
+          lights.set(105, 55, 180, 0.1f, stackchan::LightAnimation::pulse);
     } else {
       light_written =
           lights.set(255, 105, 145, 0.24f, stackchan::LightAnimation::pulse);
@@ -625,12 +776,32 @@ void handleControl(const uint8_t* payload, size_t length) {
       } else if (routine == "dance") {
         face.setState(stackchan::FaceState::happy);
         face.setEmotion("playful", 1.0f);
+      } else if (routine == "wake_up") {
+        face.setState(stackchan::FaceState::happy);
+        face.setEmotion("excited", 0.9f);
+      } else if (routine == "focus") {
+        face.setState(stackchan::FaceState::thinking);
+        face.setEmotion("curious", 0.72f);
+      } else if (routine == "good_night") {
+        face.setState(stackchan::FaceState::idle);
+        face.setEmotion("sleepy", 0.9f);
       } else {
         face.setState(stackchan::FaceState::happy);
         face.setEmotion("joy", 0.85f);
       }
     } else {
       lights.off();
+    }
+  } else if (type == "camera.capture") {
+    if (!validRequestId(request_id)) {
+      sendCameraResult(false, "camera request id must be 32 lowercase hex characters",
+                       request_id);
+    } else if (audio.playbackActive() || motion.active() ||
+               active_routine_steps != nullptr) {
+      sendCameraResult(false, "camera is busy while playback or motion is active",
+                       request_id);
+    } else {
+      captureAndSendPhoto(body["quality"] | 70, request_id);
     }
   } else if (type == "audio.energy") {
     face.setSpeechEnergy(body["value"] | 0.0f);
@@ -667,6 +838,7 @@ void websocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       // The TCP/WebSocket transport is open, but device traffic must remain
       // disabled until the nonce challenge is accepted and hello.ack arrives.
       server_connected = false;
+      clearHeldFace();
       approval_waiting_until_ms = 0;
       pending_server_nonce = "";
       pending_device_nonce = "";
@@ -822,8 +994,8 @@ void loop() {
   const uint8_t head_raw_output = head_touch.rawOutput() & 0x3F;
   const bool strong_head_contact =
       stackchan::HeadTouchSensor::strongMultiZoneContact(head_raw_output);
-  if (audio.playbackActive() && !motion_sensor_guard && strong_head_contact &&
-      !head_interrupt_latched) {
+  if (audio.playbackActive() && !motion_sensor_guard &&
+      !head_sensor_rearm_pending && strong_head_contact && !head_interrupt_latched) {
     if (head_interrupt_contact_started_ms == 0) {
       head_interrupt_contact_started_ms = now_ms;
     } else if (now_ms - head_interrupt_contact_started_ms >=
@@ -898,6 +1070,7 @@ void loop() {
     reportPlaybackState(false);
     face.setState(stackchan::FaceState::idle);
     face.setStatus("Idle");
+    applyHeldFace();
   }
   if (audio.playbackActive()) {
     face.setSpeechEnergy(audio.playbackEnergy());

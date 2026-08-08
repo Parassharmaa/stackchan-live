@@ -13,6 +13,8 @@ import httpx
 from .local_providers import response_sentence_budget, visual_only_glyph
 from .providers import LLMProvider, PendingToolApproval, TurnContext
 
+SESSION_RESET_SETTLE_SECONDS = 0.5
+
 
 @dataclass(frozen=True, slots=True)
 class _EveToolApproval:
@@ -143,6 +145,7 @@ class EveLLM(LLMProvider):
         device_id: str | None = None,
         timeout_seconds: float = 90.0,
         approval_timeout_seconds: float = 30.0,
+        reset_settle_seconds: float = SESSION_RESET_SETTLE_SECONDS,
         approval_summary_fields: Mapping[str, tuple[str, ...]] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         core_transport: httpx.AsyncBaseTransport | None = None,
@@ -152,6 +155,7 @@ class EveLLM(LLMProvider):
         self.device_id = device_id
         self.timeout_seconds = timeout_seconds
         self.approval_timeout_seconds = approval_timeout_seconds
+        self.reset_settle_seconds = max(0.0, reset_settle_seconds)
         self.approval_summary_fields = dict(approval_summary_fields or {})
         self.transport = transport
         self.core_transport = core_transport
@@ -684,6 +688,7 @@ class EveLLM(LLMProvider):
             await self._unregister_device_binding(registered_session_id)
         if session_id is None:
             return
+        settle_completed_session = self._waiting and self._active_turn_id is None
         try:
             async with httpx.AsyncClient(
                 base_url=self.base_url, timeout=5.0, transport=self.transport
@@ -694,6 +699,12 @@ class EveLLM(LLMProvider):
                         await self._submit_input_response(client, approval, approved=False)
                     except (httpx.HTTPError, RuntimeError):
                         pass
+                if settle_completed_session and self.reset_settle_seconds > 0:
+                    # Eve emits session.waiting just before its root workflow
+                    # finishes persisting the turn. Resetting immediately can
+                    # race that boundary and corrupt a multi-step event log.
+                    # This close-only grace period never delays spoken output.
+                    await asyncio.sleep(self.reset_settle_seconds)
                 response = await client.post(
                     f"/eve/v1/session/{session_id}/reset",
                     json={"reason": "Stack-chan device connection closed"},

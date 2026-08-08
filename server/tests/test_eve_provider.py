@@ -1003,3 +1003,44 @@ async def test_eve_session_binding_is_registered_and_removed() -> None:
         ),
         ("DELETE", "/v1/eve-sessions/bound_session", None),
     ]
+
+
+@pytest.mark.asyncio
+async def test_completed_eve_session_settles_before_reset(monkeypatch) -> None:
+    requests: list[str] = []
+    sleep_delays: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path.endswith("/reset"):
+            return httpx.Response(200, json={"ok": True})
+        if request.method == "POST":
+            return httpx.Response(
+                202,
+                json={"ok": True, "sessionId": "settled_session"},
+            )
+        lines = [
+            event("turn.started", turnId="settled_turn"),
+            event("message.appended", turnId="settled_turn", messageDelta="Ready."),
+            event("session.waiting", turnId="settled_turn"),
+        ]
+        return httpx.Response(200, content=("\n".join(lines) + "\n").encode())
+
+    async def record_sleep(delay: float) -> None:
+        sleep_delays.append(delay)
+
+    monkeypatch.setattr("stackchan_agent.eve_provider.asyncio.sleep", record_sleep)
+    provider = EveLLM(
+        "http://eve.test",
+        reset_settle_seconds=0.5,
+        transport=httpx.MockTransport(handler),
+    )
+
+    reply = "".join(
+        [piece async for piece in provider.generate(TurnContext("hello", "en", []))]
+    )
+    await provider.aclose()
+
+    assert reply == "Ready."
+    assert sleep_delays == [0.5]
+    assert requests[-1] == "/eve/v1/session/settled_session/reset"

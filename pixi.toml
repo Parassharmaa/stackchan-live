@@ -150,6 +150,18 @@ cmd = "python scripts/benchmark_hil_voice_motion.py"
 [tasks.hil-recent-regressions]
 cmd = "python scripts/benchmark_hil_recent_regressions.py --output artifacts/benchmarks/hil-recent-regressions-latest.json"
 
+[tasks.hil-face-requests]
+cmd = "python scripts/benchmark_hil_face_requests.py --output artifacts/benchmarks/hil-face-requests-latest.json"
+
+[tasks.hil-camera]
+cmd = "python scripts/benchmark_hil_camera.py --output artifacts/benchmarks/hil-camera-latest.json"
+
+[tasks.hil-daily-routines]
+cmd = "python scripts/benchmark_hil_daily_routines.py --output artifacts/benchmarks/hil-daily-routines-latest.json"
+
+[tasks.hil-music-styles]
+cmd = "python scripts/benchmark_hil_music_styles.py --output artifacts/benchmarks/hil-music-styles-latest.json"
+
 [tasks.hil-conversation-depth]
 cmd = "python scripts/benchmark_hil_conversation_depth.py --output artifacts/benchmarks/hil-conversation-depth-latest.json"
 

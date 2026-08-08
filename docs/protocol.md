@@ -1,6 +1,7 @@
 # Device protocol v1
 
-Control messages are JSON text frames. Audio messages are binary frames.
+Control messages are JSON text frames. Audio and camera images use distinct
+binary frames.
 
 ## Binary audio header
 
@@ -15,6 +16,22 @@ Little-endian layout, followed by signed 16-bit PCM:
 | sequence | u32 | monotonically increasing per stream |
 | timestamp_ms | u32 | sender monotonic timestamp |
 
+## Binary camera header
+
+Little-endian 42-byte layout, followed by the encoded image:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| magic | 4 bytes | `STKI` |
+| version | u8 | `1` |
+| format | u8 | `1` JPEG |
+| width | u16 | image width |
+| height | u16 | image height |
+| request_id | 32 ASCII bytes | lowercase hexadecimal correlation ID |
+
+Images are limited to 2 MB. The current firmware sends an explicit 320x240
+JPEG still; it does not stream ambient video.
+
 ## Core control messages
 
 - `auth.challenge` / `hello` / `hello.ack`
@@ -24,6 +41,7 @@ Little-endian layout, followed by signed 16-bit PCM:
 - `motion.set`
 - `lights.set`
 - `routine.play`
+- `camera.capture`
 - `tool.result`
 - `playback.duck` / `playback.duck.state`
 - `playback.flush` / `playback.flush.state`
@@ -46,8 +64,9 @@ response matches. A challenge is valid only for that connection. The firmware
 does not send audio or telemetry and does not accept the session as connected
 before `hello.ack`; the static shared secret is never transmitted.
 
-The device `hello` includes persistent `boot_count`, `head_sensor_present`, and
-`head_sensor_ready`. Presence means an I2C response was detected; readiness is
+The device `hello` includes persistent `boot_count`, `head_sensor_present`,
+`head_sensor_ready`, `camera_present`, and `camera_mode`. Sensor presence means
+an I2C response was detected; readiness is
 stricter and means the custom channel/wake configuration was written and read
 back successfully.
 
@@ -86,10 +105,19 @@ IDs, positions, limits, and final power state.
 ### `routine.play`
 
 Server-to-device request for one of the coordinated presets: `greet`,
-`celebrate`, `curious`, `comfort`, or `dance`. A routine combines face state,
-bounded lights, and head motion only after motion feedback has been verified.
-The optional `music` flag requests an audio layer but does not bypass the audio
-transport or motion safety gates.
+`celebrate`, `curious`, `comfort`, `dance`, `wake_up`, `focus`, or `good_night`.
+A routine combines face state, bounded lights, and head motion only after motion
+feedback has been verified. The optional `music` flag requests an original
+mini-song but does not bypass the paced audio transport or motion safety gates.
+
+### `camera.capture`
+
+Server-to-device request for one correlated still. Capture is allowed only for
+an explicit user photo request. Firmware centers the head, shows a curious face
+and white capture light, temporarily owns the shared internal camera-control
+bus, sends one `STKI` JPEG, restores the light/sensor bus, and returns a matching
+terminal `tool.result`. The laptop stores captures only under ignored local
+artifacts and exposes the latest image/metadata only on loopback routes.
 
 ### `tool.result`
 

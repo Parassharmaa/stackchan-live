@@ -20,6 +20,9 @@ from stackchan_agent.app import (
     is_substantial_natural_barge,
     looks_like_render_echo,
     merge_audio_without_overlap,
+    motion_capture_allows_speech_start,
+    motion_capture_is_guarded,
+    ordinary_capture_allows_speech_start,
     pairing_proof,
     pairing_response_matches,
     rebase_pacing_after_gap,
@@ -33,6 +36,48 @@ from stackchan_agent.app import (
     tool_result_is_terminal,
 )
 from stackchan_agent.local_providers import WhisperTranscription
+
+
+def test_motion_capture_guard_tracks_terminal_firmware_feedback() -> None:
+    assert motion_capture_is_guarded({"motion-1"}, now=20.0, guarded_until=10.0)
+    assert motion_capture_is_guarded(set(), now=20.0, guarded_until=20.35)
+    assert not motion_capture_is_guarded(set(), now=20.36, guarded_until=20.35)
+
+
+def test_motion_capture_rejects_servo_energy_until_voiced_tail_evidence() -> None:
+    assert not motion_capture_allows_speech_start(
+        {"motion-1"},
+        guarded=True,
+        clean_rms=8_000,
+        minimum_rms=1_100,
+        voice_frame=True,
+    )
+    assert not motion_capture_allows_speech_start(
+        set(),
+        guarded=True,
+        clean_rms=1_900,
+        minimum_rms=1_100,
+        voice_frame=False,
+    )
+    assert motion_capture_allows_speech_start(
+        set(),
+        guarded=True,
+        clean_rms=1_900,
+        minimum_rms=1_100,
+        voice_frame=True,
+    )
+
+
+def test_pending_turn_rejects_background_capture_until_playback_barge_lane() -> None:
+    assert not ordinary_capture_allows_speech_start(
+        turn_active=True, motion_allows_start=True
+    )
+    assert ordinary_capture_allows_speech_start(
+        turn_active=False, motion_allows_start=True
+    )
+    assert not ordinary_capture_allows_speech_start(
+        turn_active=False, motion_allows_start=False
+    )
 
 
 def test_bilingual_barge_probe_keeps_cross_language_japanese_cue_together() -> None:
