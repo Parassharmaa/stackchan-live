@@ -213,6 +213,18 @@ test("schedule creation requires an explicit tool command or complete natural bo
     completeNatural.tools?.map((tool) => (tool.type === "function" ? tool.name : "")),
     ["create_schedule"],
   );
+
+  const completeOneTime = await authorizedToolMiddleware().transformParams!({
+    type: "stream",
+    params: params(
+      "Schedule a reminder once on 2099-01-01 at 09:00 UTC, with quiet hours 22:00 to 07:00 and without camera.",
+    ),
+    model: {} as never,
+  });
+  assert.deepEqual(
+    completeOneTime.tools?.map((tool) => (tool.type === "function" ? tool.name : "")),
+    ["create_schedule"],
+  );
 });
 
 test("one turn advances through multiple distinct tools and then returns to speech", async () => {

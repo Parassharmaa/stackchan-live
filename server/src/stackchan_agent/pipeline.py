@@ -522,6 +522,8 @@ class CascadePipeline:
             and self.memory_enabled
             and not automatic_profiles
             and not approval_turn
+            and not planned_tools
+            and not unsupported_actions
         ):
             automatic_memories.extend(
                 self.memory.capture_episode_memory(transcript, response, language)

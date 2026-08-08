@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from stackchan_agent.app import create_app
+from stackchan_agent.app import create_app, send_locked_text
 from stackchan_agent.config import Settings
 from stackchan_agent.memory import MemoryStore
 from stackchan_agent.protocol import AudioFlags
@@ -32,6 +32,20 @@ class FakeRealtimeSocket:
 
     async def close(self) -> None:
         self.closed = True
+
+
+class OverlapDetectingDeviceSocket:
+    def __init__(self) -> None:
+        self.active_writes = 0
+        self.maximum_active_writes = 0
+        self.sent: list[str] = []
+
+    async def send_text(self, message: str) -> None:
+        self.active_writes += 1
+        self.maximum_active_writes = max(self.maximum_active_writes, self.active_writes)
+        await asyncio.sleep(0)
+        self.sent.append(message)
+        self.active_writes -= 1
 
 
 def make_pipeline(
@@ -67,6 +81,20 @@ def test_pcm16_resampler_preserves_duration_and_bounds() -> None:
 
     assert len(resampled) == 24_000
     assert abs(int(resampled.max())) <= 20_001
+
+
+@pytest.mark.asyncio
+async def test_device_text_writes_are_serialized_with_one_connection_lock() -> None:
+    socket = OverlapDetectingDeviceSocket()
+    lock = asyncio.Lock()
+
+    await asyncio.gather(
+        send_locked_text(socket, lock, "first"),  # type: ignore[arg-type]
+        send_locked_text(socket, lock, "second"),  # type: ignore[arg-type]
+    )
+
+    assert socket.maximum_active_writes == 1
+    assert socket.sent == ["first", "second"]
 
 
 @pytest.mark.asyncio

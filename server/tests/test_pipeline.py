@@ -428,6 +428,25 @@ async def test_physical_command_does_not_inject_unrelated_coffee_memory(
     ]
 
 
+@pytest.mark.asyncio
+async def test_camera_tool_turn_does_not_persist_visual_details_as_an_episode(
+    tmp_path: Path,
+) -> None:
+    memory = MemoryStore(tmp_path / "memory.sqlite3")
+    pipeline = CascadePipeline(
+        MockSTT("Look at me and tell me how I look."),
+        CapturingLLM(),
+        MockTTS(),
+        memory,
+        TraceRecorder(tmp_path / "traces", trace_id="camera-memory-isolation"),
+    )
+
+    _ = [event async for event in pipeline.run_turn(b"\x00\x00" * 320, 16_000)]
+
+    assert memory.list_recent(include_episodes=True) == []
+    memory.close()
+
+
 def test_japanese_motion_result_never_claims_completion() -> None:
     motion = plan_tools("左を向いて", "ja")[0]
 
@@ -617,6 +636,9 @@ def test_photo_offer_confirmation_authorizes_exactly_one_correlated_still() -> N
     still_context = [
         ("カメラを使う提案をして。", "Would you like me to take one camera still?")
     ]
+    still_photo_context = [
+        ("Camera.", "Would you like me to take one still photo to check the view?")
+    ]
 
     assert [
         item.name
@@ -631,6 +653,10 @@ def test_photo_offer_confirmation_authorizes_exactly_one_correlated_still() -> N
         for item in plan_tools("お願いします。", "ja", recent_turns=japanese_context)
     ] == ["move_head", "capture_photo"]
     assert [item.name for item in plan_tools("はい。", "ja", recent_turns=still_context)] == [
+        "move_head",
+        "capture_photo",
+    ]
+    assert [item.name for item in plan_tools("Yes.", "en", recent_turns=still_photo_context)] == [
         "move_head",
         "capture_photo",
     ]

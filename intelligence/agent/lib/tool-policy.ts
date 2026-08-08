@@ -159,7 +159,7 @@ const NON_AUTHORIZING_CONTEXT = [
   /\b(?:only\s+)?if\b/i,
   /\b(?:only\s+)?after\b/i,
   /\bunless\b/i,
-  /\bonce\b/i,
+  /\bonce\s+(?:i|we|you|this|that|the)\b/i,
   /\bwhen\s+(?:i|we|you)\b/i,
   /\b(?:example|hypothetical|not\s+(?:a\s+)?request)\b/i,
   /\b(?:is\s+the\s+phrase|means\s+something|shown\s+in\s+documentation|shown\s+in\s+(?:a\s+)?manual)\b/i,

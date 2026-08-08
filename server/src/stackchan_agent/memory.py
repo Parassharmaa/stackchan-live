@@ -182,9 +182,19 @@ def extract_profile_memories(
                 )
         preference = re.search(
             r"(?:私|わたし|僕|ぼく)は?([^、。！？]{1,70}?)(?:が|は)"
-            r"(大好き|好き|苦手|嫌い)(?:です|だ)?(?:[。！？]|$)",
+            r"(大好き|好きじゃない|好きではない|好き|苦手|嫌い)"
+            r"(?:です|だ|よ|んだ)?(?:[。！？]|$)",
             text,
         )
+        if not preference:
+            # Japanese commonly drops the first-person subject. Accept a
+            # direct, single-subject correction without inferring preferences
+            # from statements about someone else.
+            preference = re.search(
+                r"^([^はが、。！？]{1,40}?)(?:が|は)?"
+                r"(好きじゃない|好きではない)(?:です|だ|よ|んだ)?(?:[。！？]|$)",
+                text,
+            )
         if preference:
             value = _clean_profile_value(preference.group(1))
             sentiment = preference.group(2)

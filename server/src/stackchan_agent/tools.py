@@ -278,23 +278,16 @@ def _contextual_photo_confirmation_requested(
             previous_reply,
         )
     )
-    return explicit_offer and any(
-        marker in previous_reply
-        for marker in (
-            "take one photo",
-            "take a photo",
-            "capture one photo",
-            "capture a photo",
-            "take one camera still",
-            "take a camera still",
-            "capture one camera still",
-            "capture a camera still",
-            "写真を一枚",
-            "写真で一枚",
-            "一枚撮影",
-            "写真を撮",
-        )
+    english_photo = re.search(
+        r"\b(?:take|capture)\s+(?:one|a)\s+(?:camera\s+)?(?:still\s+)?"
+        r"(?:photo|picture|still)\b",
+        previous_reply,
     )
+    japanese_photo = any(
+        marker in previous_reply
+        for marker in ("写真を一枚", "写真で一枚", "一枚撮影", "写真を撮")
+    )
+    return explicit_offer and (bool(english_photo) or japanese_photo)
 
 
 def unsupported_action_feedback(transcript: str, language: str) -> list[str]:

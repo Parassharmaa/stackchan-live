@@ -84,6 +84,12 @@ def require_loopback(request: Request) -> None:
         raise HTTPException(status_code=403, detail="endpoint is loopback-only")
 
 
+async def send_locked_text(websocket: WebSocket, lock: asyncio.Lock, message: str) -> None:
+    """Serialize text with audio writes on a single device WebSocket."""
+    async with lock:
+        await websocket.send_text(message)
+
+
 def memory_payload(item) -> dict:
     return {
         "id": item.id,
@@ -861,6 +867,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.memory = memory
     app.state.schedules = schedules
     active_devices: dict[str, WebSocket] = {}
+    device_send_locks: dict[str, asyncio.Lock] = {}
     proactive_queues: dict[str, asyncio.Queue[Schedule]] = {}
     device_info: dict[str, dict] = {}
     device_results: dict[str, deque[dict]] = {}
@@ -1335,10 +1342,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }:
             raise HTTPException(status_code=400, detail="control type is not allowlisted")
         socket = active_devices.get(device_id)
-        if socket is None:
+        send_lock = device_send_locks.get(device_id)
+        if socket is None or send_lock is None:
             raise HTTPException(status_code=404, detail="device is not connected")
         extend_motion_capture_guard(device_id, message)
-        await socket.send_text(message.encode())
+        await send_locked_text(socket, send_lock, message.encode())
         return {"status": "dispatched", "device_id": device_id, "type": message.type}
 
     @app.websocket("/v1/device")
@@ -1472,8 +1480,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         active_motion_request_ids.add(outgoing.request_id)
                 except (TypeError, ValueError):
                     pass
-            async with send_lock:
-                await websocket.send_text(message)
+            await send_locked_text(websocket, send_lock, message)
 
         async def send_audio(message: bytes) -> bool:
             await playback_gate.wait()
@@ -3263,6 +3270,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         await websocket.close(code=1008, reason="device already connected")
                         break
                     device_id = proposed_device_id
+                    device_send_locks[device_id] = send_lock
                     active_devices[device_id] = websocket
                     proactive_queue = proactive_queues.setdefault(
                         device_id, asyncio.Queue(maxsize=2)
@@ -3653,6 +3661,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             }
                         )
                 active_devices.pop(device_id, None)
+                device_send_locks.pop(device_id, None)
                 proactive_queues.pop(device_id, None)
                 device_info.pop(device_id, None)
                 stale_sessions = [

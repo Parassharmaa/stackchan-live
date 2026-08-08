@@ -45,17 +45,53 @@ def _photo_offer(text: str) -> bool:
     )
 
 
-def _physical_now_claim(text: str) -> bool:
-    folded = text.casefold()
-    return bool(
-        re.search(
-            r"\b(?:light|lights|head|face)\b.{0,48}\b(?:is|are|has|have|turned|moved)\b"
-            r".{0,48}\b(?:now|currently|blue|red|pink|left|right|up|down)\b",
-            folded,
+def _physical_claim_tools(text: str) -> set[str]:
+    claimed: set[str] = set()
+    for sentence in re.split(r"[.!?。！？\n]+", text):
+        folded = sentence.casefold()
+        is_state_claim = bool(
+            re.search(
+                r"\b(?:light|lights|head|face)\b.{0,48}"
+                r"\b(?:is|are|has|have|turned|moved)\b.{0,48}"
+                r"\b(?:now|currently|blue|red|pink|left|right|up|down)\b",
+                folded,
+            )
+            or re.search(
+                r"\b(?:now|currently)\b.{0,48}\b(?:light|lights|head|face)\b"
+                r".{0,48}\b(?:is|are|has|have|turned|moved)\b",
+                folded,
+            )
+            or re.search(
+                r"(?:今|現在).*(?:ライト|頭|顔).*(?:青|赤|ピンク|向|なって)",
+                sentence,
+            )
+            or re.search(
+                r"(?:ライト|頭|顔).*(?:青|赤|ピンク|向).*(?:今|なっています)",
+                sentence,
+            )
         )
-        or re.search(r"(?:今|現在).*(?:ライト|頭|顔).*(?:青|赤|ピンク|向|なって)", text)
-        or re.search(r"(?:ライト|頭|顔).*(?:青|赤|ピンク|向).*(?:今|なっています)", text)
-    )
+        if not is_state_claim:
+            continue
+        if re.search(r"\b(?:light|lights)\b", folded) or "ライト" in sentence:
+            claimed.add("set_lights")
+        if re.search(r"\bhead\b", folded) or "頭" in sentence:
+            claimed.add("move_head")
+        if re.search(r"\bface\b", folded) or "顔" in sentence:
+            claimed.add("set_face")
+    return claimed
+
+
+def _physical_now_claim(text: str) -> bool:
+    return bool(_physical_claim_tools(text))
+
+
+def _completed_physical_tools(results: list[object]) -> set[str]:
+    completed: set[str] = set()
+    for result in results:
+        match = re.match(r"^([a-z][a-z0-9_]*) physically completed:", str(result))
+        if match:
+            completed.add(match.group(1))
+    return completed
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
@@ -126,6 +162,9 @@ def analyze(events: list[dict], *, tail_turns: int = 50) -> dict:
         )
         if has_instrumentation:
             instrumented += 1
+            completed_tools = _completed_physical_tools(physical_results)
+        else:
+            completed_tools = set()
         if _wake_name_only(transcript) and memory_count:
             regressions.append(
                 {
@@ -135,30 +174,43 @@ def analyze(events: list[dict], *, tail_turns: int = 50) -> dict:
                     "memories": llm.get("memories", []),
                 }
             )
-        if has_instrumentation and not planned_tools and not physical_results:
-            if _physical_now_claim(response):
+        if has_instrumentation:
+            claimed_tools = _physical_claim_tools(response)
+            ungrounded_claims = claimed_tools - completed_tools
+            if ungrounded_claims:
                 regressions.append(
                     {
                         "type": "ungrounded_physical_state_claim",
                         "turn": index,
                         "transcript": transcript,
                         "response": response,
+                        "unconfirmed_tools": sorted(ungrounded_claims),
                     }
                 )
             if (
                 _affirmative(transcript)
                 and _photo_offer(turn["previous_response"])
-                and "capture_photo" not in planned_tools
             ):
-                regressions.append(
-                    {
-                        "type": "photo_promised_without_capture",
-                        "turn": index,
-                        "transcript": transcript,
-                        "previous_response": turn["previous_response"],
-                        "response": response,
-                    }
-                )
+                if "capture_photo" not in planned_tools:
+                    regressions.append(
+                        {
+                            "type": "photo_promised_without_capture",
+                            "turn": index,
+                            "transcript": transcript,
+                            "previous_response": turn["previous_response"],
+                            "response": response,
+                        }
+                    )
+                elif "capture_photo" not in completed_tools:
+                    regressions.append(
+                        {
+                            "type": "photo_not_physically_confirmed",
+                            "turn": index,
+                            "transcript": transcript,
+                            "previous_response": turn["previous_response"],
+                            "response": response,
+                        }
+                    )
         first_token = llm.get("first_token_ms")
         if isinstance(first_token, (int, float)):
             first_tokens.append(float(first_token))
@@ -184,7 +236,7 @@ def analyze(events: list[dict], *, tail_turns: int = 50) -> dict:
         "metrics": metrics,
         "performance_warnings": performance_warnings,
         "regressions": regressions,
-        "passed": not regressions and instrumented == len(turns),
+        "passed": bool(turns) and not regressions and instrumented == len(turns),
     }
 
 

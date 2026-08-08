@@ -202,6 +202,24 @@ def test_automatic_profile_updates_one_semantic_slot(tmp_path: Path) -> None:
     store.close()
 
 
+def test_subjectless_japanese_preference_correction_updates_the_same_slot(
+    tmp_path: Path,
+) -> None:
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+
+    liked = store.capture_automatic_memories(
+        "私はコーヒーが好きです。", "覚えておきます。", "ja"
+    )[0]
+    disliked = store.capture_automatic_memories(
+        "コーヒーは好きじゃないよ。", "訂正して覚えておきます。", "ja"
+    )[0]
+
+    assert liked.id == disliked.id
+    assert disliked.content == "ユーザーはコーヒーが苦手です。"
+    assert store.retrieve("私のコーヒーの好みは？") == [disliked]
+    store.close()
+
+
 def test_episodes_are_hidden_bounded_retrievable_and_expire(tmp_path: Path) -> None:
     store = MemoryStore(
         tmp_path / "memory.sqlite3", episode_limit=2, episode_retention_days=1

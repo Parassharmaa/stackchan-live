@@ -165,3 +165,89 @@ def test_audit_rejects_lucky_correct_photo_claim_without_the_required_process() 
         "photo_promised_without_capture"
     ]
     assert result["passed"] is False
+
+
+def test_audit_rejects_an_empty_trace() -> None:
+    result = MODULE.analyze([])
+
+    assert result["metrics"]["turns"] == 0
+    assert result["passed"] is False
+
+
+def test_audit_requires_terminal_evidence_for_a_planned_state_change() -> None:
+    events = [
+        event("stt", 1, transcript="Turn the lights blue.", language="en"),
+        event(
+            "llm",
+            2,
+            response="The lights are blue now.",
+            memory_count=0,
+            planned_tools=["set_lights"],
+            physical_action_results=[],
+        ),
+    ]
+
+    result = MODULE.analyze(events)
+
+    assert result["regressions"] == [
+        {
+            "type": "ungrounded_physical_state_claim",
+            "turn": 1,
+            "transcript": "Turn the lights blue.",
+            "response": "The lights are blue now.",
+            "unconfirmed_tools": ["set_lights"],
+        }
+    ]
+    assert result["passed"] is False
+
+
+def test_audit_accepts_a_separate_sentence_that_disclaims_current_state() -> None:
+    events = [
+        event("stt", 1, transcript="考えるとき、そのライトは？", language="ja"),
+        event(
+            "llm",
+            2,
+            response=(
+                "考えているとき、ライトが青く光ることがあります。"
+                "ただし、今この瞬間に青く光っているかは確認できていません。"
+            ),
+            memory_count=0,
+            planned_tools=[],
+            physical_action_results=[],
+        ),
+    ]
+
+    result = MODULE.analyze(events)
+
+    assert result["regressions"] == []
+    assert result["passed"] is True
+
+
+def test_audit_requires_terminal_evidence_for_a_consented_photo() -> None:
+    events = [
+        event("stt", 1, transcript="Camera.", language="en"),
+        event(
+            "llm",
+            2,
+            response="Would you like me to take one photo?",
+            memory_count=0,
+            planned_tools=[],
+            physical_action_results=[],
+        ),
+        event("stt", 3, transcript="Yes.", language="en"),
+        event(
+            "llm",
+            4,
+            response="Done, I got it.",
+            memory_count=0,
+            planned_tools=["capture_photo"],
+            physical_action_results=[],
+        ),
+    ]
+
+    result = MODULE.analyze(events)
+
+    assert [item["type"] for item in result["regressions"]] == [
+        "photo_not_physically_confirmed"
+    ]
+    assert result["passed"] is False
