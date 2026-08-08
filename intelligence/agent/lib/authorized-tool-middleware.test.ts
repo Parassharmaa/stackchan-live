@@ -14,6 +14,10 @@ function params(
     "move_head",
     "recall_memory",
     "device_status",
+    "create_schedule",
+    "list_schedules",
+    "set_schedule_enabled",
+    "delete_schedule",
     "load_skill",
   ],
 ): LanguageModelV4CallOptions {
@@ -110,6 +114,9 @@ test("direct natural read and exact delete requests select one bounded tool", as
     ["What facts do you remember about me?", "recall_memory"],
     ["Please forget memory ID 7.", "forget_memory"],
     ["メモリID 7を削除してください。", "forget_memory"],
+    ["Show me my schedules.", "list_schedules"],
+    ["Pause schedule ID 4.", "set_schedule_enabled"],
+    ["Delete schedule ID 4.", "delete_schedule"],
   ] as const;
   for (const [transcript, expected] of cases) {
     const transformed = await middleware.transformParams!({
@@ -123,4 +130,39 @@ test("direct natural read and exact delete requests select one bounded tool", as
     );
     assert.deepEqual(transformed.toolChoice, { type: "tool", toolName: expected });
   }
+});
+
+test("schedule creation requires an explicit tool command or complete natural boundary", async () => {
+  const ordinary = await authorizedToolMiddleware().transformParams!({
+    type: "stream",
+    params: params("Remind me to stretch tomorrow."),
+    model: {} as never,
+  });
+  assert.deepEqual(
+    ordinary.tools?.map((tool) => (tool.type === "function" ? tool.name : "")),
+    ["load_skill"],
+  );
+
+  const explicit = await authorizedToolMiddleware().transformParams!({
+    type: "stream",
+    params: params("Use the create_schedule tool now with the exact details I provided."),
+    model: {} as never,
+  });
+  assert.deepEqual(
+    explicit.tools?.map((tool) => (tool.type === "function" ? tool.name : "")),
+    ["create_schedule"],
+  );
+  assert.deepEqual(explicit.toolChoice, { type: "tool", toolName: "create_schedule" });
+
+  const completeNatural = await authorizedToolMiddleware().transformParams!({
+    type: "stream",
+    params: params(
+      "Schedule a daily check-in at 09:00 Tokyo time, with quiet hours 22:00 to 07:00 and no camera.",
+    ),
+    model: {} as never,
+  });
+  assert.deepEqual(
+    completeNatural.tools?.map((tool) => (tool.type === "function" ? tool.name : "")),
+    ["create_schedule"],
+  );
 });

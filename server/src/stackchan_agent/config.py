@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     openai_realtime_max_output_tokens: int = 160
     openai_realtime_timeout_seconds: float = 20.0
     memory_path: Path = PROJECT_ROOT / "server/data/memory.sqlite3"
+    schedule_path: Path = PROJECT_ROOT / "server/data/schedules.sqlite3"
+    schedule_poll_seconds: float = Field(default=1.0, ge=0.1, le=30.0)
+    schedule_retry_seconds: float = Field(default=60.0, ge=5.0, le=3600.0)
     memory_automatic_profiles: bool = True
     memory_episodic_enabled: bool = True
     memory_episode_retention_days: int = Field(default=30, ge=1, le=365)

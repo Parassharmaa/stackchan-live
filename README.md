@@ -9,11 +9,14 @@ The project provides:
 - custom ESP32-S3 firmware with an animated face, head motion, lights, audio,
   top-touch input, and privacy-visible camera stills for photo and direct
   “look at me” requests;
-- laptop-local Whisper STT, Supertonic TTS, audio scheduling, and SQLite memory;
+- laptop-local Whisper STT, Supertonic TTS, audio scheduling, SQLite memory,
+  and opt-in proactive schedules;
 - Vercel Eve intelligence with bilingual conversation, skills, and typed tools;
 - pluggable cascade and OpenAI Realtime speech-to-speech providers;
 - eight coordinated expression routines, six original music styles, and
-  reproducible software and hardware-in-the-loop benchmarks.
+  reproducible software and hardware-in-the-loop benchmarks;
+- bilingual scheduled check-ins and explicitly authorized one-still
+  surroundings checks with quiet hours and pause/delete controls.
 
 > Physical voice interruption remains experimental. Current evidence and known
 > limits are tracked in [the completion audit](docs/completion-audit.md).

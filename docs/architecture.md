@@ -76,6 +76,15 @@ turns and then verifies exact English and Japanese recall plus cleanup. A
 deterministic post-turn capture boundary may also retain direct stable profile
 facts and bounded non-sensitive episodes; cancelled turns are never captured.
 
+An independent laptop-local SQLite scheduler persists explicit one-shot and
+daily check-ins. Each entry includes its device, language, IANA timezone, quiet
+hours, routine, spoken-event prompt, and a separate recurring-photo consent bit.
+A short lease prevents concurrent dispatch; the authenticated device queue waits
+for an idle conversation slot, then reuses the Eve, local-TTS, face, motion, and
+light path. Interrupted or disconnected work is retried after a bounded delay.
+No schedule can activate continuous audio, video, external MCP tools, or an
+unapproved camera capture.
+
 Latency-sensitive device tools remain in Python. They emit allowlisted protocol
 commands instead of directly touching transport state. Each invocation receives
 a unique request ID. The server waits for the matching terminal firmware result

@@ -48,8 +48,9 @@ store survives reconnect and remains listable and deletable.
 
 Always-on behavior is in `intelligence/agent/instructions.md`. Six skills cover
 bilingual conversation, expressive embodiment, memory hygiene, music moods,
-privacy-bounded ambient awareness, and safe daily rhythms. Ten typed
-tools provide durable memory operations, connected-device status, and bounded
+privacy-bounded ambient awareness, and safe daily rhythms. Fourteen typed
+tools provide durable memory operations, connected-device status, durable
+schedule management, and bounded
 face, head, light, and coordinated-routine requests through loopback-only Python
 endpoints. Latency-critical direct commands still take the deterministic Python
 lane; Eve must not duplicate an action already reported in turn context.
@@ -62,13 +63,13 @@ remains a second layer for sensitive phrasing outside the deterministic list.
 
 Eve's default shell, file read/write, glob, grep, arbitrary web fetch/search,
 todo, question parking, and subagent delegation tools are explicitly disabled.
-Only `load_skill` and the nine authored memory/device tools are visible. Eve's
+Only `load_skill` and the fourteen authored memory/device/schedule tools are visible. Eve's
 device tools return dispatch acceptance rather than fabricated completion, while
 the firmware continues to emit terminal measured results. The live contract
 used Eve to read sensor readiness and request a 12-degree head move; firmware
 completed it at raw yaw/pitch error 4/2 and released torque and power.
 
-Explicit requests for one of the nine authored tools pass through a bounded AI
+Explicit requests for one of the fourteen authored tools pass through a bounded AI
 SDK middleware. The selector reads only the final user message after the
 application-owned context delimiter, checks that the tool is actually
 advertised, and uses a fixed safe-tool list. It exposes exactly one authorized
@@ -177,6 +178,23 @@ through 20 distractor turns. The latest run recalled `amber comet` and `青い�
 deduplicated writes, rejected sensitive content with HTTP 422, and deleted every
 temporary row. Eve uses this same store when enabled, so replacing the session
 runtime does not fork or hide the robot's durable memory.
+
+## Local proactive schedules
+
+The laptop owns a SQLite schedule store and a private event queue for each
+authenticated device. One-shot and daily schedules require an explicit IANA
+timezone and quiet-hours boundary. Due work is leased, waits for an idle device,
+and is completed only after Eve-generated dialogue, laptop-local TTS, and the
+embodied routine finish. Disconnects, interruptions, and failures release the
+lease for a bounded retry. Every schedule can be listed, paused, resumed, or
+deleted. Pause and delete prevent future claims; an occurrence already claimed
+and physically underway is allowed to finish so a mid-motion stop cannot leave
+the robot in an ambiguous state.
+
+`capture_photo` is false unless the user separately authorizes one visible still
+for every occurrence. On an authorized surroundings check, Stack-chan shows its
+capture cue and takes one still. The image stays laptop-local; Eve receives only
+the conservative local-Vision summary needed to ground the spoken reply.
 
 `pixi run benchmark-adaptive-memory` verifies the automatic layer in an
 isolated temporary SQLite store. Every request uses a fresh live Eve session,

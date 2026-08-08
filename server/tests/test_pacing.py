@@ -25,6 +25,7 @@ from stackchan_agent.app import (
     ordinary_capture_allows_speech_start,
     pairing_proof,
     pairing_response_matches,
+    physical_playback_is_drained,
     preliminary_cue_has_independent_support,
     rebase_pacing_after_gap,
     retain_recent_pcm16,
@@ -70,7 +71,7 @@ def test_motion_capture_rejects_servo_energy_until_voiced_tail_evidence() -> Non
     )
 
 
-def test_pending_turn_rejects_background_capture_until_playback_barge_lane() -> None:
+def test_pending_turn_or_embodied_reaction_rejects_background_capture() -> None:
     assert not ordinary_capture_allows_speech_start(
         turn_active=True, motion_allows_start=True
     )
@@ -79,6 +80,18 @@ def test_pending_turn_rejects_background_capture_until_playback_barge_lane() -> 
     )
     assert not ordinary_capture_allows_speech_start(
         turn_active=False, motion_allows_start=False
+    )
+
+
+def test_embodied_completion_waits_for_firmware_and_server_playback_tail() -> None:
+    assert not physical_playback_is_drained(
+        device_playback_active=True, now=20.0, playback_until=19.0
+    )
+    assert not physical_playback_is_drained(
+        device_playback_active=False, now=20.0, playback_until=20.5
+    )
+    assert physical_playback_is_drained(
+        device_playback_active=False, now=20.5, playback_until=20.5
     )
 
 

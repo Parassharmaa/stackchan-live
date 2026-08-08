@@ -57,7 +57,78 @@ const SAFE_FORCED_TOOL_RULES: readonly {
     name: "play_routine",
     matches: (transcript) => explicitToolCommand(transcript, "play_routine"),
   },
+  {
+    name: "create_schedule",
+    matches: (transcript) =>
+      explicitToolCommand(transcript, "create_schedule") ||
+      completeNaturalScheduleCommand(transcript),
+  },
+  {
+    name: "list_schedules",
+    matches: (transcript) =>
+      explicitToolCommand(transcript, "list_schedules") ||
+      /^(?:please\s+)?(?:list|show|tell me|what are)\b.*\b(?:schedule|schedules|reminders|check-ins)\b/i.test(
+        transcript,
+      ) ||
+      /(?:予定|スケジュール|リマインダー|チェックイン).*(?:一覧|見せて|教えて|何)/.test(
+        transcript,
+      ),
+  },
+  {
+    name: "set_schedule_enabled",
+    matches: (transcript) =>
+      explicitToolCommand(transcript, "set_schedule_enabled") ||
+      /^(?:please\s+)?(?:pause|resume|enable|disable)\s+(?:schedule\s+)?(?:id\s*)?#?\d+[.!?\s]*$/i.test(
+        transcript,
+      ) ||
+      /(?:予定|スケジュール)(?:\s*ID)?\s*#?\d+\s*を?(?:一時停止|再開|有効|無効)(?:して|してください)?[。！？\s]*$/.test(
+        transcript,
+      ),
+  },
+  {
+    name: "delete_schedule",
+    matches: (transcript) =>
+      explicitToolCommand(transcript, "delete_schedule") ||
+      /^(?:please\s+)?(?:delete|remove|cancel)\s+(?:schedule\s+)?(?:id\s*)?#?\d+[.!?\s]*$/i.test(
+        transcript,
+      ) ||
+      /(?:予定|スケジュール)(?:\s*ID)?\s*#?\d+\s*を?(?:削除|取り消)(?:して|してください)?[。！？\s]*$/.test(
+        transcript,
+      ),
+  },
 ];
+
+function completeNaturalScheduleCommand(transcript: string): boolean {
+  const englishCommand = /^(?:please\s+)?(?:schedule|set up|create)\b.*\b(?:reminder|check-in|schedule)\b/i.test(
+    transcript,
+  );
+  const englishCadence = /\b(?:daily|every day|tomorrow|once|on \d{4}-\d{2}-\d{2})\b/i.test(
+    transcript,
+  );
+  const englishTimezone = /\b(?:Asia\/Tokyo|Tokyo time|JST|UTC)\b/i.test(transcript);
+  const englishQuietHours = /\bquiet hours?\b/i.test(transcript);
+  const englishCameraChoice = /\b(?:with|without|no) (?:a |the )?(?:camera|photo|picture|still)\b/i.test(
+    transcript,
+  );
+  if (
+    englishCommand &&
+    englishCadence &&
+    englishTimezone &&
+    englishQuietHours &&
+    englishCameraChoice
+  ) {
+    return true;
+  }
+  return (
+    /^(?:予定|スケジュール|リマインダー|チェックイン).*(?:作って|設定して|登録して)/.test(
+      transcript,
+    ) &&
+    /(?:毎日|一回|明日|\d{4}年\d{1,2}月\d{1,2}日)/.test(transcript) &&
+    /(?:Asia\/Tokyo|日本時間|JST|UTC)/i.test(transcript) &&
+    /(?:静かな時間|通知しない時間|クワイエットアワー)/.test(transcript) &&
+    /(?:カメラ|写真).*(?:使う|あり|なし|使わない|撮る|撮らない)/.test(transcript)
+  );
+}
 
 function explicitToolCommand(transcript: string, name: string): boolean {
   const command = new RegExp(

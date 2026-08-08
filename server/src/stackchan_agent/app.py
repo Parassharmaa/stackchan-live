@@ -39,6 +39,7 @@ from .protocol import (
 )
 from .providers import MockLLM, MockSTT, MockTTS, TurnContext
 from .realtime import OpenAIRealtimePipeline
+from .schedules import ROUTINES, Schedule, ScheduleStore
 from .telemetry import TraceRecorder
 from .vad import (
     ConsecutiveSpeechDetector,
@@ -60,6 +61,24 @@ class EveSessionBindingRequest(BaseModel):
     device_id: str = Field(min_length=1, max_length=128)
 
 
+class CreateScheduleRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    prompt: str = Field(min_length=1, max_length=500)
+    language: str = Field(pattern="^(en|ja)$")
+    routine: str
+    music: bool = False
+    capture_photo: bool = False
+    recurrence: str = Field(pattern="^(once|daily)$")
+    timezone: str = Field(min_length=1, max_length=80)
+    local_time: str = Field(min_length=5, max_length=16)
+    quiet_start: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    quiet_end: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+class ScheduleEnabledRequest(BaseModel):
+    enabled: bool
+
+
 def require_loopback(request: Request) -> None:
     if not request.client or request.client.host not in {"127.0.0.1", "::1"}:
         raise HTTPException(status_code=403, detail="endpoint is loopback-only")
@@ -76,6 +95,30 @@ def memory_payload(item) -> dict:
         "updated_at": item.updated_at,
         "expires_at": item.expires_at,
         "memory_key": item.memory_key,
+    }
+
+
+def schedule_payload(item: Schedule) -> dict:
+    return {
+        "id": item.id,
+        "device_id": item.device_id,
+        "label": item.label,
+        "prompt": item.prompt,
+        "language": item.language,
+        "routine": item.routine,
+        "music": item.music,
+        "capture_photo": item.capture_photo,
+        "recurrence": item.recurrence,
+        "timezone": item.timezone,
+        "local_time": item.local_time,
+        "quiet_start": item.quiet_start,
+        "quiet_end": item.quiet_end,
+        "next_fire_at": item.next_fire_at,
+        "enabled": item.enabled,
+        "last_status": item.last_status,
+        "last_fired_at": item.last_fired_at,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
     }
 
 
@@ -122,6 +165,13 @@ def ordinary_capture_allows_speech_start(
 ) -> bool:
     """Do not let a background VAD edge replace a turn while its reply is pending."""
     return not turn_active and motion_allows_start
+
+
+def physical_playback_is_drained(
+    *, device_playback_active: bool, now: float, playback_until: float
+) -> bool:
+    """Completion requires both the firmware state and paced server tail to be idle."""
+    return not device_playback_active and now >= playback_until
 
 
 def merge_audio_without_overlap(prefix: bytes, audio: bytes, *, frame_bytes: int = 640) -> bytes:
@@ -724,6 +774,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         episode_retention_days=settings.memory_episode_retention_days,
         episode_limit=settings.memory_episode_limit,
     )
+    schedules = ScheduleStore(settings.schedule_path)
     whisper_process = WhisperServerProcess(
         settings.whisper_server,
         settings.whisper_model,
@@ -763,6 +814,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        schedule_dispatch_task: asyncio.Task[None] | None = None
         try:
             if settings.provider == "cascade":
                 await asyncio.gather(
@@ -789,20 +841,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     approval_timeout_seconds=settings.eve_approval_timeout_seconds,
                 )
                 await eve_warmup.warmup()
+            schedule_dispatch_task = asyncio.create_task(dispatch_due_schedules())
             yield
         finally:
+            if schedule_dispatch_task is not None:
+                schedule_dispatch_task.cancel()
+                await asyncio.gather(schedule_dispatch_task, return_exceptions=True)
             await asyncio.gather(
                 whisper_process.stop(),
                 whisper_ja_fast_process.stop(),
                 whisper_ja_process.stop(),
             )
             await supertonic_process.stop()
+            schedules.close()
             memory.close()
 
     app = FastAPI(title="Stack-chan Local", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.memory = memory
+    app.state.schedules = schedules
     active_devices: dict[str, WebSocket] = {}
+    proactive_queues: dict[str, asyncio.Queue[Schedule]] = {}
     device_info: dict[str, dict] = {}
     device_results: dict[str, deque[dict]] = {}
     device_captures: dict[str, dict] = {}
@@ -814,6 +873,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         PROJECT_ROOT / "scripts/apple_vision.swift",
         settings.trace_dir.parent / "bin/stackchan-vision",
     )
+
+    async def dispatch_due_schedules() -> None:
+        while True:
+            for scheduled_device_id, queue in list(proactive_queues.items()):
+                if queue.qsize() >= 1:
+                    continue
+                item = schedules.claim_due(scheduled_device_id)
+                if item is not None:
+                    await queue.put(item)
+            await asyncio.sleep(settings.schedule_poll_seconds)
 
     def results_for(device_id: str) -> deque[dict]:
         return device_results.setdefault(device_id, deque(maxlen=200))
@@ -1103,6 +1172,120 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         device_id = bound_device_id(session_id)
         return {"device_id": device_id, **device_info.get(device_id, {})}
 
+    def create_schedule_for_device(
+        device_id: str, body: CreateScheduleRequest
+    ) -> Schedule:
+        if body.routine not in ROUTINES:
+            raise HTTPException(status_code=422, detail="routine is not allowlisted")
+        try:
+            return schedules.create(
+                device_id=device_id,
+                label=body.label,
+                prompt=body.prompt,
+                language=body.language,
+                routine=body.routine,
+                music=body.music,
+                capture_photo=body.capture_photo,
+                recurrence=body.recurrence,
+                timezone_name=body.timezone,
+                local_time=body.local_time,
+                quiet_start=body.quiet_start,
+                quiet_end=body.quiet_end,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get("/v1/eve-sessions/{session_id}/device/schedules")
+    async def list_bound_schedules(session_id: str, request: Request) -> dict:
+        require_loopback(request)
+        device_id = bound_device_id(session_id)
+        return {
+            "schedules": [
+                schedule_payload(item)
+                for item in schedules.list(device_id, include_disabled=True)
+            ]
+        }
+
+    @app.post("/v1/eve-sessions/{session_id}/device/schedules")
+    async def create_bound_schedule(
+        session_id: str, body: CreateScheduleRequest, request: Request
+    ) -> dict:
+        require_loopback(request)
+        return {
+            "schedule": schedule_payload(
+                create_schedule_for_device(bound_device_id(session_id), body)
+            )
+        }
+
+    @app.patch("/v1/eve-sessions/{session_id}/device/schedules/{schedule_id}")
+    async def set_bound_schedule_enabled(
+        session_id: str,
+        schedule_id: int,
+        body: ScheduleEnabledRequest,
+        request: Request,
+    ) -> dict:
+        require_loopback(request)
+        try:
+            item = schedules.set_enabled(
+                schedule_id, bound_device_id(session_id), body.enabled
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="schedule not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {"schedule": schedule_payload(item)}
+
+    @app.delete("/v1/eve-sessions/{session_id}/device/schedules/{schedule_id}")
+    async def delete_bound_schedule(
+        session_id: str, schedule_id: int, request: Request
+    ) -> dict:
+        require_loopback(request)
+        deleted = schedules.delete(schedule_id, bound_device_id(session_id))
+        return {"schedule_id": schedule_id, "deleted": deleted}
+
+    @app.get("/v1/devices/{device_id}/schedules")
+    async def list_device_schedules(device_id: str, request: Request) -> dict:
+        require_loopback(request)
+        return {
+            "schedules": [
+                schedule_payload(item)
+                for item in schedules.list(device_id, include_disabled=True)
+            ]
+        }
+
+    @app.post("/v1/devices/{device_id}/schedules")
+    async def create_device_schedule(
+        device_id: str, body: CreateScheduleRequest, request: Request
+    ) -> dict:
+        require_loopback(request)
+        return {"schedule": schedule_payload(create_schedule_for_device(device_id, body))}
+
+    @app.patch("/v1/devices/{device_id}/schedules/{schedule_id}")
+    async def set_device_schedule_enabled(
+        device_id: str,
+        schedule_id: int,
+        body: ScheduleEnabledRequest,
+        request: Request,
+    ) -> dict:
+        require_loopback(request)
+        try:
+            item = schedules.set_enabled(schedule_id, device_id, body.enabled)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="schedule not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {"schedule": schedule_payload(item)}
+
+    @app.delete("/v1/devices/{device_id}/schedules/{schedule_id}")
+    async def delete_device_schedule(
+        device_id: str, schedule_id: int, request: Request
+    ) -> dict:
+        require_loopback(request)
+        return {
+            "schedule_id": schedule_id,
+            "deleted": schedules.delete(schedule_id, device_id),
+        }
+
     @app.post("/v1/eve-sessions/{session_id}/device/control")
     async def send_bound_device_control(
         session_id: str, message: ControlMessage, request: Request
@@ -1190,6 +1373,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         auto_turn_detection = settings.auto_turn_detection and settings.provider != "mock"
         turn_task: asyncio.Task[None] | None = None
         sensor_task: asyncio.Task[None] | None = None
+        scheduled_worker_task: asyncio.Task[None] | None = None
         sensor_cancel = asyncio.Event()
         last_head_gesture_accepted_at = 0.0
         device_id: str | None = None
@@ -2148,7 +2332,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             finally:
                 await event_stream.aclose()
 
-        async def send_sensor_reaction(gesture: str) -> None:
+        async def execute_embodied_control(
+            command_type: str, payload: dict, *, deadline_seconds: float = 8.0
+        ) -> dict:
+            request_id = secrets.token_hex(16)
+            result_future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
+            pending_tool_results[request_id] = result_future
+            try:
+                await send_text(
+                    control(command_type, request_id=request_id, **payload).encode()
+                )
+                return await asyncio.wait_for(result_future, timeout=deadline_seconds)
+            except TimeoutError:
+                return {
+                    "success": False,
+                    "stage": "timeout",
+                    "detail": "no correlated terminal firmware result",
+                }
+            finally:
+                pending_tool_results.pop(request_id, None)
+
+        async def send_sensor_reaction(
+            gesture: str, scheduled: Schedule | None = None
+        ) -> bool:
             nonlocal current_render_text, playback_started_at, playback_until
             reactions = {
                 "touch": {
@@ -2199,10 +2405,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             }
             reaction = reactions.get(gesture)
+            if scheduled is not None:
+                reaction = {
+                    "routine": scheduled.routine,
+                    "en": scheduled.prompt,
+                    "ja": scheduled.prompt,
+                    "music": scheduled.music,
+                    "capture_photo": scheduled.capture_photo,
+                    "source": "schedule",
+                }
             if reaction is None:
-                return
-            language = preferred_language if preferred_language in {"en", "ja"} else "en"
+                return False
+            language = (
+                scheduled.language
+                if scheduled is not None
+                else preferred_language if preferred_language in {"en", "ja"} else "en"
+            )
             event_context = str(reaction[language])
+            action_results = [
+                f"The {reaction['routine']} routine is planned and will begin "
+                "together with this spoken reaction."
+            ]
+            if bool(reaction.get("capture_photo", False)):
+                pose_result = await execute_embodied_control(
+                    "motion.set",
+                    {"yaw_deg": 0.0, "pitch_deg": 45.0, "duration_ms": 550},
+                )
+                if not bool(pose_result.get("success", False)):
+                    raise RuntimeError(
+                        f"scheduled camera pose failed: {pose_result.get('detail', 'unknown')}"
+                    )
+                capture_result = await execute_embodied_control(
+                    "camera.capture", {"quality": 70}, deadline_seconds=12.0
+                )
+                if not bool(capture_result.get("success", False)):
+                    raise RuntimeError(
+                        f"scheduled photo failed: {capture_result.get('detail', 'unknown')}"
+                    )
+                vision = capture_result.get("vision")
+                if not isinstance(vision, dict) or not vision.get("summary"):
+                    raise RuntimeError("scheduled photo has no grounded local-vision result")
+                action_results.append(
+                    "One explicitly authorized visible still was captured for this occurrence. "
+                    f"Local Vision reports: {vision['summary']}"
+                )
             model_generated = settings.provider != "mock"
             reaction_llm = sensor_llm if sensor_llm is not None else llm
             sensor_model = settings.eve_model if model_generated else "mock"
@@ -2223,18 +2469,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         # General conversation episodes can only distract or
                         # contaminate this short embodied reaction.
                         memories=[],
-                        action_results=(
-                            f"The {reaction['routine']} routine is planned and will begin "
-                            "together with this spoken reaction.",
-                        ),
+                        action_results=tuple(action_results),
                     )
                 ):
                     if sensor_cancel.is_set():
                         reaction_llm.cancel()
-                        return
+                        return False
                     generated += piece
                 if sensor_cancel.is_set():
-                    return
+                    return False
                 text, _ = take_speakable_phrase(generated, language, force=True)
                 attrs["response"] = text
             if not text:
@@ -2247,7 +2490,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "routine.play",
                     name=reaction["routine"],
                     intensity=0.8,
-                    music=reaction["routine"] == "dance",
+                    music=bool(reaction.get("music", reaction["routine"] == "dance")),
                 ).encode()
             )
             await send_text(
@@ -2263,6 +2506,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "type": "telemetry",
                         "component": "sensor_reaction",
                         "gesture": gesture,
+                        **({"schedule_id": scheduled.id} if scheduled is not None else {}),
                         "routine": reaction["routine"],
                         "text": text,
                         "language": language,
@@ -2281,7 +2525,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             sequence = 0
             pending_pcm: bytes | None = None
             try:
-                if reaction["routine"] == "dance":
+                if bool(reaction.get("music", reaction["routine"] == "dance")):
                     music_frames = signature_jingle(str(reaction["routine"]))
                     if device_id:
                         results_for(device_id).append(
@@ -2298,7 +2542,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         )
                     for pcm in music_frames:
                         if sensor_cancel.is_set():
-                            return
+                            return False
                         playback_started = playback_started or loop.time()
                         if playback_started_at == 0 or not is_speaking():
                             playback_started_at = playback_started
@@ -2319,7 +2563,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             pcm=pcm,
                         )
                         if not await send_audio(frame.encode()):
-                            return
+                            return False
                         feed_render_reference(frame.pcm)
                         audio_sent_seconds += len(frame.pcm) / 2 / settings.output_sample_rate
                         playback_until = max(
@@ -2333,7 +2577,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         sequence += 1
                 async for pcm in tts.synthesize(text, language):
                     if sensor_cancel.is_set():
-                        return
+                        return False
                     if pending_pcm is not None:
                         frame = AudioFrame(
                             stream=AudioStream.SPEAKER,
@@ -2355,7 +2599,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         if target > loop.time():
                             await asyncio.sleep(target - loop.time())
                         if not await send_audio(frame.encode()):
-                            return
+                            return False
                         feed_render_reference(frame.pcm)
                         audio_sent_seconds += len(frame.pcm) / 2 / settings.output_sample_rate
                         playback_until = max(
@@ -2370,7 +2614,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     pending_pcm = pcm
                 if pending_pcm is not None:
                     if sensor_cancel.is_set():
-                        return
+                        return False
                     flags = AudioFlags.END
                     if sequence == 0:
                         flags |= AudioFlags.START
@@ -2394,7 +2638,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if target > loop.time():
                         await asyncio.sleep(target - loop.time())
                     if not await send_audio(frame.encode()):
-                        return
+                        return False
                     feed_render_reference(frame.pcm)
                     audio_sent_seconds += len(frame.pcm) / 2 / settings.output_sample_rate
                     playback_until = max(
@@ -2409,11 +2653,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     control(
                         "response.text.done",
                         text=text,
-                        source="sensor.head",
+                        source=("schedule" if scheduled is not None else "sensor.head"),
                         llm_generated=True,
                     ).encode()
                 )
+                drain_deadline = loop.time() + 30.0
+                while not physical_playback_is_drained(
+                    device_playback_active=device_playback_active,
+                    now=loop.time(),
+                    playback_until=playback_until,
+                ):
+                    if sensor_cancel.is_set():
+                        return False
+                    if loop.time() >= drain_deadline:
+                        raise RuntimeError(
+                            "physical playback did not become idle before the deadline"
+                        )
+                    await asyncio.sleep(0.05)
                 await send_text(control("session.state", state="idle").encode())
+                return True
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -2431,6 +2689,86 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     control("error", code="sensor_reaction_failed", detail=str(error)).encode()
                 )
                 await send_text(control("session.state", state="idle").encode())
+                return False
+
+        async def run_scheduled_events(queue: asyncio.Queue[Schedule]) -> None:
+            nonlocal sensor_task
+            while True:
+                scheduled = await queue.get()
+                reaction_task: asyncio.Task[bool] | None = None
+                try:
+                    deadline = asyncio.get_running_loop().time() + 60.0
+                    while (
+                        (turn_task is not None and not turn_task.done())
+                        or (sensor_task is not None and not sensor_task.done())
+                        or is_speaking()
+                    ):
+                        if asyncio.get_running_loop().time() >= deadline:
+                            schedules.release(
+                                scheduled.id,
+                                "busy_retry",
+                                retry_at=time.time() + settings.schedule_retry_seconds,
+                            )
+                            break
+                        await asyncio.sleep(0.25)
+                    else:
+                        sensor_cancel.clear()
+                        playback_abort.clear()
+                        resume_playback_stream()
+                        reaction_task = asyncio.create_task(
+                            send_sensor_reaction(
+                                f"schedule:{scheduled.id}", scheduled=scheduled
+                            )
+                        )
+                        sensor_task = reaction_task
+                        completed = await reaction_task
+                        if completed:
+                            schedules.complete(scheduled.id)
+                            if device_id:
+                                results_for(device_id).append(
+                                    {
+                                        "type": "telemetry",
+                                        "component": "schedule_completed",
+                                        "schedule_id": scheduled.id,
+                                        "label": scheduled.label,
+                                        "capture_photo": scheduled.capture_photo,
+                                        "received_monotonic_ns": time.perf_counter_ns(),
+                                    }
+                                )
+                        else:
+                            schedules.release(
+                                scheduled.id,
+                                "interrupted_retry",
+                                retry_at=time.time() + settings.schedule_retry_seconds,
+                            )
+                except asyncio.CancelledError:
+                    if reaction_task is not None and not reaction_task.done():
+                        reaction_task.cancel()
+                        await asyncio.gather(reaction_task, return_exceptions=True)
+                    schedules.release(
+                        scheduled.id,
+                        "disconnected_retry",
+                        retry_at=time.time() + settings.schedule_retry_seconds,
+                    )
+                    raise
+                except Exception as error:
+                    schedules.release(
+                        scheduled.id,
+                        "failed_retry",
+                        retry_at=time.time() + settings.schedule_retry_seconds,
+                    )
+                    if device_id:
+                        results_for(device_id).append(
+                            {
+                                "type": "telemetry",
+                                "component": "schedule_failed",
+                                "schedule_id": scheduled.id,
+                                "detail": str(error),
+                                "received_monotonic_ns": time.perf_counter_ns(),
+                            }
+                        )
+                finally:
+                    queue.task_done()
 
         async def start_turn(audio: bytes) -> None:
             nonlocal sensor_task, turn_task
@@ -2791,7 +3129,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             # runs; the completed task is consumed above.
                             continue
                         allow_speech_start = ordinary_capture_allows_speech_start(
-                            turn_active=bool(turn_task and not turn_task.done()),
+                            turn_active=bool(
+                                (turn_task and not turn_task.done())
+                                or (sensor_task and not sensor_task.done())
+                            ),
                             motion_allows_start=motion_voice_strong,
                         )
                         if speaking:
@@ -2898,6 +3239,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         break
                     device_id = proposed_device_id
                     active_devices[device_id] = websocket
+                    proactive_queue = proactive_queues.setdefault(
+                        device_id, asyncio.Queue(maxsize=2)
+                    )
+                    scheduled_worker_task = asyncio.create_task(
+                        run_scheduled_events(proactive_queue)
+                    )
                     if isinstance(llm, EveLLM):
                         await llm.bind_device(device_id)
                     if sensor_llm is not None:
@@ -3225,6 +3572,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     turn_task,
                     sensor_task,
                     voice_barge_verification_task,
+                    scheduled_worker_task,
                 )
                 if task is not None
             ]
@@ -3237,6 +3585,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await sensor_llm.aclose()
             if device_id and active_devices.get(device_id) is websocket:
                 active_devices.pop(device_id, None)
+                proactive_queues.pop(device_id, None)
                 device_info.pop(device_id, None)
                 stale_sessions = [
                     session_id
