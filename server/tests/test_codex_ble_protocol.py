@@ -168,6 +168,8 @@ def test_avatar_hud_shows_ntp_time_and_live_battery_level() -> None:
     assert "drawFaceHud(now_ms);" in face
     assert "M5.Power.getBatteryLevel()" in face
     assert "now_ms - last_battery_read_ms_ >= 30000" in face
+    assert 'snprintf(battery_text, sizeof(battery_text), "%d%%", battery_level_)' in face
+    assert "textdatum_t::middle_right" in face
     assert 'strftime(clock_text, sizeof(clock_text), "%H:%M"' in face
     assert 'configTzTime(STACKCHAN_TIMEZONE, "pool.ntp.org", "time.nist.gov")' in main
     assert '#define STACKCHAN_TIMEZONE "JST-9"' in local_config

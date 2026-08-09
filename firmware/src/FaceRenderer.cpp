@@ -265,8 +265,10 @@ void FaceRenderer::drawFaceHud(uint32_t now_ms) {
   display_.fillRect(286, 12, 2, 4, ink);
   const int fill_width = battery_level_ * 15 / 100;
   if (fill_width > 0) display_.fillRect(269, 11, fill_width, 6, battery_ink);
-  display_.drawNumber(battery_level_, 291, 14);
-  display_.drawString("%", 307, 14);
+  char battery_text[5];
+  snprintf(battery_text, sizeof(battery_text), "%d%%", battery_level_);
+  display_.setTextDatum(textdatum_t::middle_right);
+  display_.drawString(battery_text, 311, 14);
 }
 
 void FaceRenderer::drawCodex(uint32_t now_ms) {
