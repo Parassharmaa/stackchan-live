@@ -12,6 +12,18 @@ enum class ScreenTapRoute : uint8_t {
   conversation,
 };
 
+constexpr int touchTravelMagnitude(int distance) {
+  return distance < 0 ? -distance : distance;
+}
+
+constexpr bool isCodexControlRelease(bool codex_mode, bool was_released,
+                                     int distance_x, int distance_y,
+                                     int max_travel = 24) {
+  return codex_mode && was_released &&
+         touchTravelMagnitude(distance_x) <= max_travel &&
+         touchTravelMagnitude(distance_y) <= max_travel;
+}
+
 // Keep the interaction decision independent of M5Unified so the exact policy
 // can be executed on the laptop in regression tests.
 constexpr ScreenTapRoute routeScreenTap(bool codex_mode, bool playback_active,

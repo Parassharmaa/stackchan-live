@@ -18,6 +18,15 @@ def test_firmware_interaction_policy_executes_on_host(tmp_path: Path) -> None:
 using stackchan::ScreenTapRoute;
 
 int main() {
+  // CoreS3 controls are recognized from a low-travel release instead of the
+  // stricter M5Unified click classifier. Drags and swipes remain excluded.
+  assert(stackchan::isCodexControlRelease(true, true, 0, 0));
+  assert(stackchan::isCodexControlRelease(true, true, 24, -24));
+  assert(!stackchan::isCodexControlRelease(true, false, 0, 0));
+  assert(!stackchan::isCodexControlRelease(false, true, 0, 0));
+  assert(!stackchan::isCodexControlRelease(true, true, 25, 0));
+  assert(!stackchan::isCodexControlRelease(true, true, 0, -25));
+
   // A Codex button always remains a Codex button, even while speech is active.
   assert(stackchan::routeScreenTap(true, true, 1) ==
          ScreenTapRoute::codex_control);

@@ -968,12 +968,24 @@ void handleTouch(uint32_t now_ms) {
       return;
     }
   }
-  if (!detail.wasClicked()) return;
+  const bool codex_control_released = stackchan::isCodexControlRelease(
+      face.codexMode(), detail.wasReleased(), detail.distanceX(),
+      detail.distanceY());
+  if (face.codexMode()) {
+    // M5Unified's wasClicked() classifier is deliberately stricter than the
+    // physical controller needs and discarded real slot taps on CoreS3. A
+    // bounded release keeps buttons reliable while rejecting drags/swipes.
+    if (!codex_control_released) return;
+  } else if (!detail.wasClicked()) {
+    return;
+  }
   const auto tap_route = stackchan::routeScreenTap(
       face.codexMode(), audio.playbackActive(), detail.getClickCount());
   const int x = detail.x;
   const int y = detail.y;
   if (tap_route == stackchan::ScreenTapRoute::codex_control) {
+    Serial.printf("codex-ui: control release x=%d y=%d dx=%d dy=%d\n", x, y,
+                  detail.distanceX(), detail.distanceY());
     // Codex is a dedicated control surface. Voice playback and a preceding UI
     // cue must never reinterpret its buttons as conversation interruption.
     // This also lets the user switch away from a speaking/working session.

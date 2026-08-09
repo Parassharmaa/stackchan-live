@@ -93,6 +93,8 @@ def test_touch_ui_maps_agents_actions_and_contextual_approval() -> None:
     assert "codex.setMicPressed(true)" in main
     assert "codex.setMicPressed(false)" in main
     assert "codex.selectAgent" in main
+    assert "isCodexControlRelease(" in main
+    assert 'Serial.printf("codex-ui: control release' in main
     assert "constrain(x / 50, 0, 5)" in main
     assert "detail.wasFlicked() || detail.wasDragged() || detail.wasReleased()" in main
     assert "abs(detail.distanceX()) >= 40" in main
