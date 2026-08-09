@@ -78,6 +78,9 @@ cmd = "python scripts/build_face_assets.py"
 cmd = "platformio run -d firmware -t upload"
 depends-on = ["face-assets"]
 
+[tasks.codex-ble-check]
+cmd = "pytest -q server/tests/test_codex_ble_protocol.py && platformio run -d firmware"
+
 [tasks.download-models]
 cmd = "bash scripts/download_whisper_models.sh"
 

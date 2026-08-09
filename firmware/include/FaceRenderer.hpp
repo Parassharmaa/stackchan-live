@@ -2,6 +2,10 @@
 
 #include <M5Unified.h>
 
+#include <array>
+
+#include "CodexBleController.hpp"
+
 namespace stackchan {
 
 enum class FaceState : uint8_t {
@@ -24,6 +28,11 @@ class FaceRenderer {
   void setSpeechEnergy(float energy);
   void setGaze(float x, float y);
   void setStatus(const String& status);
+  void setCodexMode(bool enabled);
+  bool codexMode() const { return codex_mode_; }
+  void setCodexConnected(bool connected);
+  void setCodexSelectedAgent(uint8_t index);
+  void setCodexAgentState(uint8_t index, CodexAgentState state, uint32_t color);
   void update(uint32_t now_ms);
   bool speakingFramesCached() const { return speaking_frames_cached_; }
   uint32_t speakingMouthTransitions() const { return speaking_mouth_transitions_; }
@@ -31,6 +40,7 @@ class FaceRenderer {
 
  private:
   void draw(uint32_t now_ms);
+  void drawCodex(uint32_t now_ms);
   void renderAsset(int index, const uint8_t* data, size_t length);
 
   M5GFX& display_;
@@ -56,6 +66,11 @@ class FaceRenderer {
   uint32_t speech_variant_changed_ms_ = 0;
   uint32_t speaking_mouth_transitions_ = 0;
   uint32_t speaking_blinks_ = 0;
+  bool codex_mode_ = false;
+  bool codex_connected_ = false;
+  uint8_t codex_selected_agent_ = 0;
+  std::array<CodexAgentState, 6> codex_agent_states_{};
+  std::array<uint32_t, 6> codex_agent_colors_{};
 };
 
 FaceState faceStateFromString(const String& value);

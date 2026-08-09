@@ -13,6 +13,7 @@
 
 #include "AudioEndpoint.hpp"
 #include "CameraEndpoint.hpp"
+#include "CodexBleController.hpp"
 #include "DeviceProtocol.hpp"
 #include "FaceRenderer.hpp"
 #include "HeadTouchSensor.hpp"
@@ -48,6 +49,7 @@ stackchan::CameraEndpoint camera;
 stackchan::HeadTouchSensor head_touch;
 stackchan::LightController lights;
 stackchan::MotionController motion;
+stackchan::CodexBleController codex;
 bool server_connected = false;
 String pending_server_nonce;
 String pending_device_nonce;
@@ -64,6 +66,9 @@ uint32_t head_interrupt_contact_started_ms = 0;
 bool head_interrupt_latched = false;
 uint32_t approval_waiting_until_ms = 0;
 bool held_face_active = false;
+bool codex_mic_pressed = false;
+stackchan::CodexAgentState last_codex_motion_state =
+    stackchan::CodexAgentState::off;
 String held_face_state = "idle";
 String held_face_emotion = "neutral";
 float held_face_intensity = 0.5f;
@@ -897,7 +902,10 @@ bool connectWifiFromFactoryNvs() {
   if (ssid.isEmpty()) return false;
 
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
+  // ESP32-S3 radio coexistence requires modem sleep while BLE is enabled.
+  // Disabling it causes an immediate abort in the Wi-Fi driver. The audio
+  // stream remains continuous because the WebSocket queue absorbs wake gaps.
+  WiFi.setSleep(true);
   WiFi.begin(ssid.c_str(), password.c_str());
   face.setStatus("Connecting Wi-Fi");
   const uint32_t started = millis();
@@ -908,10 +916,52 @@ bool connectWifiFromFactoryNvs() {
   return WiFi.status() == WL_CONNECTED;
 }
 
+void syncCodexUi(bool force = false);
+void updateCodexPose();
+
+void enterCodexMode() {
+  face.setCodexMode(true);
+  syncCodexUi(true);
+  // Entering the mode is visual only. Do not turn a navigation gesture into
+  // unsolicited servo motion.
+  last_codex_motion_state = codex.agent(codex.selectedAgent()).state();
+}
+
+void exitCodexMode() {
+  if (codex_mic_pressed) codex.setMicPressed(false);
+  codex_mic_pressed = false;
+  face.setCodexMode(false);
+  lights.set(255, 105, 145, 0.08f, stackchan::LightAnimation::solid);
+}
+
 void handleTouch(uint32_t now_ms) {
   (void)now_ms;
-  if (!server_connected || M5.Touch.getCount() == 0) return;
   const auto& detail = M5.Touch.getDetail(0);
+  if (face.codexMode()) {
+    const auto state = codex.agent(codex.selectedAgent()).state();
+    const bool mic_region = detail.x >= 240 && detail.y >= 176 &&
+                            state != stackchan::CodexAgentState::needs_input;
+    if (!codex_mic_pressed && detail.wasPressed() && mic_region) {
+      codex_mic_pressed = codex.setMicPressed(true);
+      return;
+    }
+    if (codex_mic_pressed && detail.wasReleased()) {
+      codex.setMicPressed(false);
+      codex_mic_pressed = false;
+      return;
+    }
+  }
+  if (detail.wasFlicked() && abs(detail.distanceX()) >= 70 &&
+      abs(detail.distanceX()) > abs(detail.distanceY()) * 2) {
+    if (!face.codexMode() && detail.distanceX() < 0) {
+      enterCodexMode();
+      return;
+    }
+    if (face.codexMode() && detail.distanceX() > 0) {
+      exitCodexMode();
+      return;
+    }
+  }
   if (!detail.wasClicked()) return;
   if (audio.playbackActive()) {
     // A single tap during playback is intentionally inert. The second tap in
@@ -922,10 +972,103 @@ void handleTouch(uint32_t now_ms) {
     sendBargeIn("screen_double_tap");
     face.setState(stackchan::FaceState::listening);
     face.setStatus("Listening");
-  } else {
+    return;
+  }
+
+  const int x = detail.x;
+  const int y = detail.y;
+  if (face.codexMode()) {
+    if (x < 52 && y < 48) {
+      exitCodexMode();
+      return;
+    }
+    if (y >= 42 && y <= 94) {
+      const int agent = constrain(x / 50, 0, 5);
+      codex.selectAgent(static_cast<uint8_t>(agent));
+      // Agent navigation updates the screen/lights but never moves the head.
+      last_codex_motion_state = codex.agent(agent).state();
+      return;
+    }
+    if (y >= 176) {
+      const auto state = codex.agent(codex.selectedAgent()).state();
+      if (state == stackchan::CodexAgentState::needs_input) {
+        codex.sendAction(x < 160 ? 2 : 1);  // NG / OK
+      } else {
+        const int command = constrain(x / 80, 0, 3);
+        if (command == 0) codex.sendAction(0);       // Fast
+        if (command == 1) codex.sendAction(3);       // Plan
+        if (command == 2) codex.sendAction(4);       // AI / new task
+        // The microphone is handled as a true press/release above.
+      }
+      return;
+    }
+    return;
+  }
+
+  if (server_connected) {
     sendControl("turn.commit");
     face.setState(stackchan::FaceState::thinking);
     face.setStatus("Thinking");
+  }
+}
+
+void syncCodexUi(bool force) {
+  const bool dirty = codex.consumeUiDirty();
+  if (!force && !dirty) return;
+  face.setCodexConnected(codex.connected());
+  face.setCodexSelectedAgent(codex.selectedAgent());
+  for (uint8_t index = 0; index < stackchan::CodexBleController::kAgentCount;
+       ++index) {
+    const auto& agent = codex.agent(index);
+    face.setCodexAgentState(index, agent.state(), agent.color);
+  }
+  if (!face.codexMode()) return;
+  const auto selected_state = codex.agent(codex.selectedAgent()).state();
+  switch (selected_state) {
+    case stackchan::CodexAgentState::working:
+      lights.set(48, 79, 254, 0.24f, stackchan::LightAnimation::chase);
+      break;
+    case stackchan::CodexAgentState::complete:
+      lights.set(0, 255, 76, 0.20f, stackchan::LightAnimation::pulse);
+      break;
+    case stackchan::CodexAgentState::needs_input:
+      lights.set(255, 109, 0, 0.25f, stackchan::LightAnimation::pulse);
+      break;
+    case stackchan::CodexAgentState::error:
+      lights.set(255, 0, 51, 0.25f, stackchan::LightAnimation::pulse);
+      break;
+    case stackchan::CodexAgentState::idle:
+      lights.set(255, 255, 255, 0.08f, stackchan::LightAnimation::solid);
+      break;
+    case stackchan::CodexAgentState::off:
+      lights.off();
+      break;
+  }
+}
+
+void updateCodexPose() {
+  if (!face.codexMode()) return;
+  const auto selected_state = codex.agent(codex.selectedAgent()).state();
+  if (selected_state == last_codex_motion_state) return;
+  if (audio.playbackActive() || motion.active() || active_routine_steps != nullptr) {
+    return;
+  }
+  // Host state transitions get one restrained pose; touch navigation never
+  // enters this path.
+  float yaw = 0.0f;
+  float pitch = 45.0f;
+  if (selected_state == stackchan::CodexAgentState::working) pitch = 39.0f;
+  if (selected_state == stackchan::CodexAgentState::complete) pitch = 31.0f;
+  if (selected_state == stackchan::CodexAgentState::needs_input) {
+    yaw = 12.0f;
+    pitch = 36.0f;
+  }
+  if (selected_state == stackchan::CodexAgentState::error) {
+    yaw = -10.0f;
+    pitch = 54.0f;
+  }
+  if (motion.move(true, yaw, true, pitch, 460)) {
+    last_codex_motion_state = selected_state;
   }
 }
 
@@ -944,6 +1087,7 @@ void setup() {
   face.begin();
   face.setState(stackchan::FaceState::booting);
   face.setStatus("Custom Stack-chan");
+  codex.begin();
 
   if (!connectWifiFromFactoryNvs()) {
     face.setState(stackchan::FaceState::error);
@@ -968,6 +1112,9 @@ void setup() {
 void loop() {
   const uint32_t now_ms = millis();
   M5.update();
+  codex.update();
+  syncCodexUi();
+  updateCodexPose();
   socket_client.loop();
   if (approval_waiting_until_ms != 0 &&
       static_cast<int32_t>(now_ms - approval_waiting_until_ms) >= 0) {

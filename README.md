@@ -9,6 +9,8 @@ The project provides:
 - custom ESP32-S3 firmware with an animated face, head motion, lights, audio,
   top-touch input, and privacy-visible camera stills for photo and direct
   “look at me/this” requests;
+- a swipe-launched Codex mode with BLE agent status, six agent selectors,
+  contextual approvals, quick actions, and matching body-light feedback;
 - laptop-local Whisper STT, Supertonic TTS, audio scheduling, SQLite memory,
   and opt-in proactive schedules;
 - Vercel Eve intelligence with bilingual conversation, skills, and typed tools;
@@ -63,6 +65,9 @@ pixi run firmware-upload
 
 Normal uploads preserve Wi-Fi credentials stored in the device's NVS. Do not
 erase the flash if those credentials must be retained.
+
+To use Stack-chan as a Codex controller, follow the short
+[BLE pairing guide](docs/codex-mode.md).
 
 ## Verify
 
