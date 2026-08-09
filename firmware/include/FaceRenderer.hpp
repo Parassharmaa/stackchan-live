@@ -37,6 +37,8 @@ class FaceRenderer {
   void setCodexVoiceState(CodexVoiceState state) { codex_voice_state_ = state; }
   void setCodexArchiveArmed(bool armed) { codex_archive_armed_ = armed; }
   void setCodexQueuedFollowup(bool queued) { codex_queued_followup_ = queued; }
+  void setCodexStatusOpen(bool open) { codex_status_open_ = open; }
+  bool codexStatusOpen() const { return codex_status_open_; }
   void update(uint32_t now_ms);
   bool speakingFramesCached() const { return speaking_frames_cached_; }
   uint32_t speakingMouthTransitions() const { return speaking_mouth_transitions_; }
@@ -45,6 +47,7 @@ class FaceRenderer {
  private:
   void draw(uint32_t now_ms);
   void drawCodex(uint32_t now_ms);
+  void drawFaceHud(uint32_t now_ms);
   void renderAsset(int index, const uint8_t* data, size_t length);
 
   M5GFX& display_;
@@ -70,6 +73,9 @@ class FaceRenderer {
   uint32_t speech_variant_changed_ms_ = 0;
   uint32_t speaking_mouth_transitions_ = 0;
   uint32_t speaking_blinks_ = 0;
+  uint32_t last_hud_draw_ms_ = 0;
+  uint32_t last_battery_read_ms_ = 0;
+  int battery_level_ = 0;
   bool codex_mode_ = false;
   bool codex_connected_ = false;
   uint8_t codex_selected_agent_ = 0;
@@ -79,6 +85,7 @@ class FaceRenderer {
   CodexVoiceState codex_voice_state_ = CodexVoiceState::idle;
   bool codex_archive_armed_ = false;
   bool codex_queued_followup_ = false;
+  bool codex_status_open_ = false;
 };
 
 FaceState faceStateFromString(const String& value);

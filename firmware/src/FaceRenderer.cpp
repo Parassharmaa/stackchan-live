@@ -1,5 +1,8 @@
 #include "FaceRenderer.hpp"
 
+#include <time.h>
+
+#include "CodexIcons.hpp"
 #include "generated/FaceAssets.hpp"
 
 namespace stackchan {
@@ -24,56 +27,6 @@ struct Asset {
   const uint8_t* data;
   size_t length;
 };
-
-void drawBoltIcon(M5Canvas& canvas, int cx, int cy, uint16_t color) {
-  canvas.fillTriangle(cx + 2, cy - 14, cx - 9, cy + 1, cx - 1, cy + 1,
-                      color);
-  canvas.fillTriangle(cx - 2, cy - 1, cx + 9, cy - 1, cx - 4, cy + 14,
-                      color);
-}
-
-void drawNewChatIcon(M5Canvas& canvas, int cx, int cy, uint16_t color) {
-  canvas.drawRoundRect(cx - 13, cy - 11, 26, 20, 6, color);
-  canvas.drawLine(cx - 8, cy + 9, cx - 12, cy + 14, color);
-  canvas.drawLine(cx - 8, cy + 9, cx - 3, cy + 9, color);
-  canvas.fillRect(cx - 1, cy - 6, 3, 13, color);
-  canvas.fillRect(cx - 6, cy - 1, 13, 3, color);
-}
-
-void drawForkIcon(M5Canvas& canvas, int cx, int cy, uint16_t color) {
-  canvas.fillRect(cx - 11, cy - 10, 3, 21, color);
-  canvas.drawLine(cx - 9, cy, cx + 7, cy - 10, color);
-  canvas.drawLine(cx - 8, cy + 1, cx + 8, cy + 11, color);
-  canvas.fillCircle(cx - 10, cy - 11, 4, color);
-  canvas.fillCircle(cx + 10, cy - 12, 4, color);
-  canvas.fillCircle(cx + 10, cy + 12, 4, color);
-}
-
-void drawArchiveIcon(M5Canvas& canvas, int cx, int cy, uint16_t color) {
-  canvas.drawRoundRect(cx - 13, cy + 1, 26, 13, 3, color);
-  canvas.fillRoundRect(cx - 15, cy - 4, 30, 5, 2, color);
-  canvas.fillRect(cx - 1, cy - 13, 3, 12, color);
-  canvas.fillTriangle(cx - 6, cy - 3, cx + 6, cy - 3, cx, cy + 4, color);
-  canvas.fillRect(cx - 5, cy + 7, 10, 2, color);
-}
-
-void drawSteerIcon(M5Canvas& canvas, int cx, int cy, uint16_t color) {
-  canvas.fillRect(cx - 13, cy + 7, 10, 3, color);
-  canvas.fillRect(cx - 5, cy - 8, 3, 18, color);
-  canvas.fillRect(cx - 3, cy - 8, 14, 3, color);
-  canvas.fillTriangle(cx + 8, cy - 13, cx + 8, cy - 2, cx + 15, cy - 8,
-                      color);
-}
-
-void drawMicIcon(M5Canvas& canvas, int cx, int cy, uint16_t color) {
-  canvas.drawRoundRect(cx - 7, cy - 13, 14, 21, 7, color);
-  canvas.drawRoundRect(cx - 6, cy - 12, 12, 19, 6, color);
-  canvas.drawLine(cx - 12, cy + 1, cx - 12, cy + 6, color);
-  canvas.drawLine(cx + 12, cy + 1, cx + 12, cy + 6, color);
-  canvas.drawArc(cx, cy + 5, 12, 10, 0, 180, color);
-  canvas.fillRect(cx - 1, cy + 14, 3, 7, color);
-  canvas.fillRoundRect(cx - 8, cy + 20, 17, 3, 1, color);
-}
 
 }  // namespace
 
@@ -280,6 +233,40 @@ void FaceRenderer::draw(uint32_t now_ms) {
     logical_asset_index_ = target.index;
     renderAsset(target.index, target.data, target.length);
   }
+  drawFaceHud(now_ms);
+}
+
+void FaceRenderer::drawFaceHud(uint32_t now_ms) {
+  // Keep the HUD responsive without polling the power IC or repainting over
+  // the audio/display bus on every 30 fps face-animation frame.
+  if (last_hud_draw_ms_ != 0 && now_ms - last_hud_draw_ms_ < 250) return;
+  last_hud_draw_ms_ = now_ms;
+  if (last_battery_read_ms_ == 0 || now_ms - last_battery_read_ms_ >= 30000) {
+    battery_level_ = constrain(M5.Power.getBatteryLevel(), 0, 100);
+    last_battery_read_ms_ = now_ms;
+  }
+  const uint16_t panel = display_.color565(255, 252, 255);
+  const uint16_t ink = display_.color565(82, 73, 94);
+  const uint16_t battery_ink = display_.color565(86, 180, 122);
+  char clock_text[6] = "--:--";
+  const time_t epoch = time(nullptr);
+  if (epoch > 24 * 60 * 60) {
+    struct tm local_time {};
+    localtime_r(&epoch, &local_time);
+    strftime(clock_text, sizeof(clock_text), "%H:%M", &local_time);
+  }
+
+  display_.fillRoundRect(221, 5, 94, 19, 8, panel);
+  display_.setTextDatum(textdatum_t::middle_left);
+  display_.setTextSize(1);
+  display_.setTextColor(ink);
+  display_.drawString(clock_text, 227, 14);
+  display_.drawRoundRect(267, 9, 19, 10, 3, ink);
+  display_.fillRect(286, 12, 2, 4, ink);
+  const int fill_width = battery_level_ * 15 / 100;
+  if (fill_width > 0) display_.fillRect(269, 11, fill_width, 6, battery_ink);
+  display_.drawNumber(battery_level_, 291, 14);
+  display_.drawString("%", 307, 14);
 }
 
 void FaceRenderer::drawCodex(uint32_t now_ms) {
@@ -368,12 +355,20 @@ void FaceRenderer::drawCodex(uint32_t now_ms) {
   String title = codex_agent_titles_[codex_selected_agent_];
   if (title.isEmpty()) title = String("TASK ") + (codex_selected_agent_ + 1);
   title.replace("\n", " ");
-  if (title.length() > 31) title = title.substring(0, 28) + "...";
+  if (title.length() > 24) title = title.substring(0, 21) + "...";
   canvas_.drawString(title, 100, 69);
   canvas_.setTextColor(color565(kCodexText));
   canvas_.setTextSize(2);
   canvas_.drawString(codexAgentStateName(selected_state), 100, 91);
   canvas_.setTextSize(1);
+  const uint32_t status_fill = codex_status_open_ ? 0x334263 : 0x272B3D;
+  const uint16_t status_ink = color565(codex_status_open_ ? 0xB9C8FF : 0xAEB4C8);
+  canvas_.fillRoundRect(270, 71, 29, 38, 10, color565(status_fill));
+  canvas_.drawRoundRect(270, 71, 29, 38, 10, color565(0x47506A));
+  canvas_.drawBitmap(275, 80, codex_icons::list_checks_20, 20, 20, status_ink);
+  const uint16_t live_dot = color565(
+      selected_state == CodexAgentState::error ? 0xFF6B88 : 0x8BFFBC);
+  canvas_.fillCircle(294, 76, 3, live_dot);
   canvas_.setTextDatum(textdatum_t::middle_center);
 
   const bool approval = selected_state == CodexAgentState::needs_input;
@@ -388,6 +383,35 @@ void FaceRenderer::drawCodex(uint32_t now_ms) {
     canvas_.drawCircle(238, 181, 20, approve_ink);
     canvas_.drawLine(226, 181, 235, 190, approve_ink);
     canvas_.drawLine(235, 190, 252, 171, approve_ink);
+  } else if (codex_status_open_) {
+    canvas_.fillRoundRect(8, 128, 304, 104, 17, color565(0x202436));
+    canvas_.drawRoundRect(8, 128, 304, 104, 17, color565(0x3A4057));
+    canvas_.setTextDatum(textdatum_t::top_left);
+    canvas_.setTextColor(color565(0xB9C8FF));
+    canvas_.drawBitmap(20, 139, codex_icons::list_checks_20, 20, 20,
+                       color565(0xB9C8FF));
+    canvas_.setTextSize(1);
+    canvas_.drawString("TASK STATUS", 48, 143);
+    canvas_.setTextColor(color565(kCodexText));
+    String summary;
+    switch (selected_state) {
+      case CodexAgentState::working: summary = "Work is in progress"; break;
+      case CodexAgentState::complete: summary = "Completed on laptop"; break;
+      case CodexAgentState::needs_input: summary = "Waiting for your input"; break;
+      case CodexAgentState::error: summary = "Task needs attention"; break;
+      case CodexAgentState::idle: summary = "Ready for a message"; break;
+      case CodexAgentState::off: summary = "No task assigned"; break;
+    }
+    canvas_.drawString(summary, 48, 157);
+    canvas_.drawFastHLine(20, 174, 280, color565(0x363B50));
+    canvas_.setTextColor(color565(kCodexMuted));
+    canvas_.drawString("HOST", 20, 183);
+    canvas_.drawString("QUEUE", 20, 205);
+    canvas_.setTextColor(color565(kCodexText));
+    canvas_.drawString(codex_connected_ ? "Connected" : "Disconnected", 78, 183);
+    canvas_.drawString(codex_queued_followup_ ? "Follow-up waiting" : "Nothing queued",
+                       78, 205);
+    canvas_.setTextDatum(textdatum_t::middle_center);
   } else {
     // Five compact icon keys keep utility actions available without spending
     // scarce pixels on labels. The wide mic below remains the clear primary
@@ -414,16 +438,19 @@ void FaceRenderer::drawCodex(uint32_t now_ms) {
       canvas_.setTextColor(color565(icon));
       const uint16_t ink = color565(kCodexText);
       if (index == 0) {
-        drawBoltIcon(canvas_, x + 28, 152, ink);
+        canvas_.drawBitmap(x + 14, 138, codex_icons::lightning_28, 28, 28, ink);
       } else if (index == 1) {
-        drawNewChatIcon(canvas_, x + 28, 152, ink);
+        canvas_.drawBitmap(x + 14, 138, codex_icons::chat_circle_dots_28, 28,
+                           28, ink);
       } else if (index == 2) {
-        drawForkIcon(canvas_, x + 28, 152, ink);
+        canvas_.drawBitmap(x + 14, 138, codex_icons::git_fork_28, 28, 28, ink);
       } else if (index == 3) {
-        drawArchiveIcon(canvas_, x + 28, 152, color565(icon));
+        canvas_.drawBitmap(x + 14, 138, codex_icons::archive_28, 28, 28,
+                           color565(icon));
       } else {
         const uint16_t steer_ink = color565(icon);
-        drawSteerIcon(canvas_, x + 28, 152, steer_ink);
+        canvas_.drawBitmap(x + 14, 138, codex_icons::arrow_bend_up_right_28,
+                           28, 28, steer_ink);
         if (steer_ready) canvas_.fillCircle(x + 43, 166, 3, steer_ink);
       }
     }
@@ -444,7 +471,7 @@ void FaceRenderer::drawCodex(uint32_t now_ms) {
     canvas_.drawRoundRect(8, 184, 304, 48, 15, color565(0x593B60));
     canvas_.setTextColor(color565(mic_text));
     const uint16_t mic_ink = color565(mic_text);
-    drawMicIcon(canvas_, 160, 207, mic_ink);
+    canvas_.drawBitmap(142, 189, codex_icons::microphone_36, 36, 36, mic_ink);
     if (codex_voice_state_ == CodexVoiceState::processing) {
       const int active_dot = static_cast<int>((now_ms / 220) % 3);
       for (int dot = 0; dot < 3; ++dot) {

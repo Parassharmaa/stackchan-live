@@ -10,6 +10,7 @@
 
 #include <cstring>
 #include <iterator>
+#include <time.h>
 
 #include "AudioEndpoint.hpp"
 #include "CameraEndpoint.hpp"
@@ -39,6 +40,9 @@
 #endif
 #ifndef STACKCHAN_SERVER_PATH
 #define STACKCHAN_SERVER_PATH "/v1/device"
+#endif
+#ifndef STACKCHAN_TIMEZONE
+#define STACKCHAN_TIMEZONE "JST-9"
 #endif
 
 namespace {
@@ -956,6 +960,7 @@ void enterCodexMode() {
   face.setCodexVoiceState(stackchan::CodexVoiceState::idle);
   face.setCodexArchiveArmed(false);
   face.setCodexQueuedFollowup(false);
+  face.setCodexStatusOpen(false);
   codex_queued_followup = false;
   codex_archive_armed_until_ms = 0;
   syncCodexUi(true);
@@ -978,6 +983,7 @@ void exitCodexMode() {
   face.setCodexVoiceState(stackchan::CodexVoiceState::idle);
   face.setCodexArchiveArmed(false);
   face.setCodexQueuedFollowup(false);
+  face.setCodexStatusOpen(false);
   face.setCodexMode(false);
   lights.set(255, 105, 145, 0.08f, stackchan::LightAnimation::solid);
 }
@@ -986,7 +992,7 @@ void handleTouch(uint32_t now_ms) {
   const auto& detail = M5.Touch.getDetail(0);
   if (face.codexMode()) {
     const auto state = codex.agent(codex.selectedAgent()).state();
-    const bool mic_region = detail.y >= 181 &&
+    const bool mic_region = !face.codexStatusOpen() && detail.y >= 181 &&
                             state != stackchan::CodexAgentState::needs_input;
     if (!codex_mic_pressed && detail.wasPressed() && mic_region) {
       // Clear every existing local cue before dictation so the laptop receives
@@ -1055,6 +1061,7 @@ void handleTouch(uint32_t now_ms) {
       codex_queued_followup = false;
       face.setCodexArchiveArmed(false);
       face.setCodexQueuedFollowup(false);
+      face.setCodexStatusOpen(false);
       audio.playUiSound(codex.connected()
                             ? stackchan::UiSoundEffect::agent_select
                             : stackchan::UiSoundEffect::error,
@@ -1064,6 +1071,12 @@ void handleTouch(uint32_t now_ms) {
       last_codex_motion_state = codex.agent(agent).state();
       return;
     }
+    if (y >= 59 && y < 124 && x >= 260) {
+      face.setCodexStatusOpen(!face.codexStatusOpen());
+      audio.playUiSound(stackchan::UiSoundEffect::agent_select);
+      return;
+    }
+    if (face.codexStatusOpen()) return;
     if (y >= 126) {
       const auto state = codex.agent(codex.selectedAgent()).state();
       if (state == stackchan::CodexAgentState::needs_input) {
@@ -1278,6 +1291,8 @@ void setup() {
     face.setStatus("Wi-Fi setup needed");
     return;
   }
+
+  configTzTime(STACKCHAN_TIMEZONE, "pool.ntp.org", "time.nist.gov");
 
   audio.begin();
   head_touch.begin();

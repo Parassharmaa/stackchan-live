@@ -1,5 +1,15 @@
 # Third-party notices
 
+## Phosphor Icons
+
+The Stack-chan Codex controller uses selected filled icons from
+[Phosphor Icons](https://phosphoricons.com/), version 2.1.1.
+
+Copyright (c) 2023 Phosphor Icons
+
+Distributed under the MIT License. The complete license and preserved SVG
+sources are in `third_party/phosphor-icons/`.
+
 ## VibeWatch
 
 The Codex BLE HID compatibility layer was informed by the public

@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parents[2]
 BLE_SOURCE = ROOT / "firmware/src/CodexBleController.cpp"
 MAIN_SOURCE = ROOT / "firmware/src/main.cpp"
 FACE_SOURCE = ROOT / "firmware/src/FaceRenderer.cpp"
+FACE_HEADER = ROOT / "firmware/include/FaceRenderer.hpp"
+CODEX_ICONS = ROOT / "firmware/include/CodexIcons.hpp"
 AUDIO_SOURCE = ROOT / "firmware/src/AudioEndpoint.cpp"
 APP_SOURCE = ROOT / "server/src/stackchan_agent/app.py"
 
@@ -120,6 +122,55 @@ def test_touch_ui_maps_agents_actions_and_contextual_approval() -> None:
     assert '"CODEX CONTROL"' not in face
     assert '"VOICE PAUSED"' not in face
     assert 'drawString("<"' not in face
+
+
+def test_approved_phosphor_fill_icons_are_rendered_as_firmware_bitmaps() -> None:
+    face = FACE_SOURCE.read_text()
+    icons = CODEX_ICONS.read_text()
+    notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text()
+    expected = (
+        "lightning_28",
+        "chat_circle_dots_28",
+        "git_fork_28",
+        "archive_28",
+        "arrow_bend_up_right_28",
+        "microphone_36",
+        "list_checks_20",
+    )
+    for name in expected:
+        assert f"uint8_t {name}[] PROGMEM" in icons
+        assert f"codex_icons::{name}" in face
+    assert "Phosphor Icons" in notices
+    assert (ROOT / "third_party/phosphor-icons/LICENSE").is_file()
+    assert not re.search(r"void draw(?:Bolt|NewChat|Fork|Archive|Steer|Mic)Icon", face)
+
+
+def test_codex_status_panel_is_factual_and_blocks_underlying_controls() -> None:
+    main = MAIN_SOURCE.read_text()
+    face = FACE_SOURCE.read_text()
+    header = FACE_HEADER.read_text()
+    assert "setCodexStatusOpen" in header
+    assert "codexStatusOpen" in header
+    assert "TASK STATUS" in face
+    assert "Work is in progress" in face
+    assert "Completed on laptop" in face
+    assert 'codex_connected_ ? "Connected" : "Disconnected"' in face
+    assert 'codex_queued_followup_ ? "Follow-up waiting" : "Nothing queued"' in face
+    assert "y >= 59 && y < 124 && x >= 260" in main
+    assert "if (face.codexStatusOpen()) return;" in main
+    assert "!face.codexStatusOpen() && detail.y >= 181" in main
+
+
+def test_avatar_hud_shows_ntp_time_and_live_battery_level() -> None:
+    main = MAIN_SOURCE.read_text()
+    face = FACE_SOURCE.read_text()
+    local_config = (ROOT / "firmware/include/LocalConfig.example.hpp").read_text()
+    assert "drawFaceHud(now_ms);" in face
+    assert "M5.Power.getBatteryLevel()" in face
+    assert "now_ms - last_battery_read_ms_ >= 30000" in face
+    assert 'strftime(clock_text, sizeof(clock_text), "%H:%M"' in face
+    assert 'configTzTime(STACKCHAN_TIMEZONE, "pool.ntp.org", "time.nist.gov")' in main
+    assert '#define STACKCHAN_TIMEZONE "JST-9"' in local_config
 
 
 def test_agent_touch_emits_double_activation_and_uses_duplex_safe_sounds() -> None:
