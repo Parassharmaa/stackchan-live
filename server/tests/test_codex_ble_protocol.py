@@ -9,6 +9,7 @@ BLE_SOURCE = ROOT / "firmware/src/CodexBleController.cpp"
 MAIN_SOURCE = ROOT / "firmware/src/main.cpp"
 FACE_SOURCE = ROOT / "firmware/src/FaceRenderer.cpp"
 AUDIO_SOURCE = ROOT / "firmware/src/AudioEndpoint.cpp"
+APP_SOURCE = ROOT / "server/src/stackchan_agent/app.py"
 
 REPORT_LENGTH = 63
 CHUNK_LENGTH = 61
@@ -87,9 +88,13 @@ def test_all_six_status_colors_have_semantic_ui_states() -> None:
 def test_touch_ui_maps_agents_actions_and_contextual_approval() -> None:
     main = MAIN_SOURCE.read_text()
     face = FACE_SOURCE.read_text()
-    for action in (0, 3, 4):
-        assert f"codex.sendAction({action})" in main
-    assert "codex.sendAction(decline ? 2 : 1)" in main
+    assert "codex.toggleFastMode()" in main
+    assert "codex.togglePlanMode()" not in main
+    assert "codex.startNewChat()" in main
+    assert "codex.continueInNewChat()" in main
+    assert "codex.steerQueuedFollowup()" in main
+    assert "codex.decline() : codex.approve()" in main
+    assert "codex.submitComposer()" in main
     assert "codex.setMicPressed(true)" in main
     assert "codex.setMicPressed(false)" in main
     assert "codex.selectAgent" in main
@@ -106,9 +111,15 @@ def test_touch_ui_maps_agents_actions_and_contextual_approval() -> None:
     assert "motion.move(true, yaw, true, pitch" in main
     assert "last_codex_motion_agent" not in main
     assert "drawCodexLauncher" not in face
-    assert '"DECLINE"' in face
-    assert '"APPROVE"' in face
-    assert '"FAST"' in face and '"PLAN"' in face and '"HOLD MIC"' in face
+    assert 'drawCircle(82, 181, 20' in face
+    assert 'drawCircle(238, 181, 20' in face
+    assert 'fillRoundRect(8, 184, 304, 48' in face
+    assert '"PLAN"' not in face
+    for label in ('"FAST"', '"NEW"', '"FORK"', '"STEER"', '"ARCHIVE"'):
+        assert label not in face
+    assert '"CODEX CONTROL"' not in face
+    assert '"VOICE PAUSED"' not in face
+    assert 'drawString("<"' not in face
 
 
 def test_agent_touch_emits_double_activation_and_uses_duplex_safe_sounds() -> None:
@@ -122,7 +133,6 @@ def test_agent_touch_emits_double_activation_and_uses_duplex_safe_sounds() -> No
     for effect in (
         "agent_select",
         "fast",
-        "plan",
         "assistant",
         "approve",
         "decline",
@@ -135,6 +145,10 @@ def test_agent_touch_emits_double_activation_and_uses_duplex_safe_sounds() -> No
     assert "audio.uiSoundActive()" in main
     assert "zeroPadUiSoundFrame(" in audio
     assert "uiSoundPcmFrameLength(" in audio
+    assert "write16Be(kAw88298Address, 0x06, 0x14C5)" in audio
+    assert "write16Be(kAw88298Address, 0x06, 0x14C7)" not in audio
+    assert "const size_t writes = ui_sound_active_" in audio
+    assert "Only the end of the complete cue is padded" in audio
 
 
 def test_codex_controls_are_not_swallowed_by_voice_playback_guard() -> None:
@@ -159,3 +173,89 @@ def test_codex_mode_does_not_replace_wifi_voice_transport() -> None:
     assert "WiFi.setSleep(true)" in main
     assert "WiFi.setSleep(false)" not in main
     assert "NimBLEDevice::deleteAllBonds" not in BLE_SOURCE.read_text()
+
+
+def test_codex_audio_session_is_isolated_and_resumes_on_exit() -> None:
+    main = MAIN_SOURCE.read_text()
+    audio = AUDIO_SOURCE.read_text()
+    app = APP_SOURCE.read_text()
+    enter = main.index("void enterCodexMode()")
+    exit_mode = main.index("void exitCodexMode()")
+    touch = main.index("void handleTouch", exit_mode)
+    assert "audio.setConversationPaused(true);" in main[enter:exit_mode]
+    assert "flushAudioWithSensorGuard();" in main[enter:exit_mode]
+    assert 'sendControl("conversation.suspend");' in main[enter:exit_mode]
+    assert "audio.setConversationPaused(false);" in main[exit_mode:touch]
+    assert 'sendControl("conversation.resume");' in main[exit_mode:touch]
+    assert 'if (face.codexMode()) sendControl("conversation.suspend");' in main
+    assert "if (conversation_paused_) return;" in audio
+    assert "if (conversation_paused_ || !connected_" in audio
+    assert "if (audio.conversationPaused()) break;" in main
+    assert 'command.type == "conversation.suspend"' in app
+    assert 'command.type == "conversation.resume"' in app
+    assert "await stop_playback(\"codex_mode\")" in app
+    assert "if conversation_suspended:" in app
+    assert "await conversation_resumed.wait()" in app
+
+
+def test_archive_is_a_confirmed_native_keyboard_shortcut() -> None:
+    main = MAIN_SOURCE.read_text()
+    face = FACE_SOURCE.read_text()
+    ble = BLE_SOURCE.read_text()
+    policy = (ROOT / "firmware/include/CodexInteractionPolicy.hpp").read_text()
+    assert "kCodexArchiveModifiers = 0x0A" in policy
+    assert "kCodexArchiveKey = 0x04" in policy
+    assert "g_keyboard_input = g_hid->getInputReport(1)" in ble
+    assert "sendKeyboardChord(kCodexArchiveModifiers, kCodexArchiveKey)" in ble
+    assert "codex.archiveThread()" in main
+    assert "codex_archive_armed_until_ms = now_ms + 2500" in main
+    assert "codex_archive_armed_" in face
+    assert "fill = 0x543716" in face
+
+
+def test_new_chat_uses_native_shortcut_and_queued_steer_uses_micro_action() -> None:
+    main = MAIN_SOURCE.read_text()
+    ble = BLE_SOURCE.read_text()
+    policy = (ROOT / "firmware/include/CodexInteractionPolicy.hpp").read_text()
+    assert "kCodexNewChatModifiers = 0x08" in policy
+    assert "kCodexNewChatKey = 0x11" in policy
+    assert "sendKeyboardChord(kCodexNewChatModifiers, kCodexNewChatKey)" in ble
+    assert "bool CodexBleController::steerQueuedFollowup()" in ble
+    assert "const bool sent = submitComposer();" in ble
+    assert "codex.startNewChat()" in main
+    assert "codex.continueInNewChat()" in main
+    assert "codex.steerQueuedFollowup()" in main
+    assert "codex_queued_followup = sent && was_working" in main
+    assert "face.setCodexQueuedFollowup(codex_queued_followup)" in main
+
+
+def test_codex_titles_are_sent_by_runtime_and_rendered_on_device() -> None:
+    app = APP_SOURCE.read_text()
+    main = MAIN_SOURCE.read_text()
+    face = FACE_SOURCE.read_text()
+    assert "recent_codex_titles" in app
+    assert 'control("codex.sessions", titles=titles)' in app
+    assert 'type == "codex.sessions"' in main
+    assert "face.setCodexAgentTitle" in main
+    assert "codex_agent_titles_[codex_selected_agent_]" in face
+    assert 'String("ACTIVE AGENT  ")' not in face
+
+
+def test_mic_release_waits_for_host_completion_then_submits() -> None:
+    main = MAIN_SOURCE.read_text()
+    ble = BLE_SOURCE.read_text()
+    assert 'strcmp(method, "v.oai.rgbcfg") == 0' in ble
+    assert "decodeCodexVoiceLighting(effect, color)" in ble
+    assert "codex_submit_pending = true;" in main
+    assert "shouldSubmitCodexDictation(host_state, elapsed_ms)" in main
+    assert "codex.submitComposer()" in main
+    assert 'Serial.printf("codex-ui: dictation submit' in main
+
+
+def test_current_codex_action_protocol() -> None:
+    header = (ROOT / "firmware/include/CodexInteractionPolicy.hpp").read_text()
+    ble = BLE_SOURCE.read_text()
+    for value in (6, 7, 8, 9, 12):
+        assert f"= {value}" in header
+    assert 'event["m"] = "v.oai.rad";' not in ble
+    assert "togglePlanMode" not in ble

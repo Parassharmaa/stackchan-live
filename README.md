@@ -10,7 +10,8 @@ The project provides:
   top-touch input, and privacy-visible camera stills for photo and direct
   “look at me/this” requests;
 - a swipe-launched Codex mode with BLE agent status, six agent selectors,
-  contextual approvals, quick actions, and matching body-light feedback;
+  contextual approvals, auto-sent hold-to-talk, and separate New, Fork,
+  Archive, and Steer controls with matching body-light feedback;
 - laptop-local Whisper STT, Supertonic TTS, audio scheduling, SQLite memory,
   and opt-in proactive schedules;
 - Vercel Eve intelligence with bilingual conversation, skills, and typed tools;

@@ -11,7 +11,6 @@ namespace stackchan {
 enum class UiSoundEffect : uint8_t {
   agent_select,
   fast,
-  plan,
   assistant,
   approve,
   decline,
@@ -24,6 +23,8 @@ class AudioEndpoint {
   explicit AudioEndpoint(WebSocketsClient& socket) : socket_(socket) {}
   bool begin();
   void setConnected(bool connected) { connected_ = connected; }
+  void setConversationPaused(bool paused) { conversation_paused_ = paused; }
+  bool conversationPaused() const { return conversation_paused_; }
   bool playbackActive() const { return playback_active_; }
   bool uiSoundActive() const { return ui_sound_active_; }
   void setDucked(bool ducked, float gain = 0.05f);
@@ -102,6 +103,7 @@ class AudioEndpoint {
   uint32_t sequence_ = 0;
   uint32_t render_reference_sequence_ = 0;
   bool connected_ = false;
+  bool conversation_paused_ = false;
   bool playback_active_ = false;
   bool ui_sound_active_ = false;
   bool playback_ducked_ = false;

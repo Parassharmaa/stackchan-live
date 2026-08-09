@@ -58,6 +58,13 @@ def test_barge_in_preserves_screen_double_tap_reason() -> None:
     assert decoded.payload == {"reason": "screen_double_tap"}
 
 
+@pytest.mark.parametrize("action", ["conversation.suspend", "conversation.resume"])
+def test_conversation_session_control_round_trip(action: str) -> None:
+    decoded = ControlMessage.decode(f'{{"type":"{action}"}}')
+    assert decoded.type == action
+    assert decoded.payload == {}
+
+
 def test_image_frame_round_trip() -> None:
     original = ImageFrame(
         request_id="0123456789abcdef0123456789abcdef",

@@ -68,6 +68,11 @@ bool head_interrupt_latched = false;
 uint32_t approval_waiting_until_ms = 0;
 bool held_face_active = false;
 bool codex_mic_pressed = false;
+bool codex_submit_pending = false;
+bool codex_queued_followup = false;
+uint32_t codex_mic_released_ms = 0;
+uint32_t codex_sent_feedback_until_ms = 0;
+uint32_t codex_archive_armed_until_ms = 0;
 stackchan::CodexAgentState last_codex_motion_state =
     stackchan::CodexAgentState::off;
 String held_face_state = "idle";
@@ -658,6 +663,10 @@ void handleControl(const uint8_t* payload, size_t length) {
     audio.setConnected(true);
     face.setState(stackchan::FaceState::idle);
     face.setStatus("Ready");
+    // A reboot or Wi-Fi reconnect can finish while the Codex surface is still
+    // open. Reassert exclusive ownership after authentication so the laptop
+    // runtime cannot silently resume underneath it.
+    if (face.codexMode()) sendControl("conversation.suspend");
   } else if (!server_connected) {
     // No physical control or audio state is accepted before the server proves
     // knowledge of the pairing secret for this connection's two fresh nonces.
@@ -687,6 +696,13 @@ void handleControl(const uint8_t* payload, size_t length) {
     } else if (state == "idle") {
       lights.set(255, 105, 145, 0.08f, stackchan::LightAnimation::solid);
       if (!audio.playbackActive()) applyHeldFace();
+    }
+  } else if (type == "codex.sessions") {
+    const JsonArrayConst titles = body["titles"].as<JsonArrayConst>();
+    uint8_t index = 0;
+    for (JsonVariantConst value : titles) {
+      if (index >= stackchan::CodexBleController::kAgentCount) break;
+      face.setCodexAgentTitle(index++, value.as<String>());
     }
   } else if (type == "approval.requested") {
     const float timeout_seconds = constrain(
@@ -882,6 +898,7 @@ void websocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     case WStype_BIN:
       {
       if (!server_connected) break;
+      if (audio.conversationPaused()) break;
       const bool was_active = audio.playbackActive();
       audio.playFrame(payload, length);
       if (!was_active && audio.playbackActive()) reportPlaybackState(true);
@@ -921,7 +938,26 @@ void syncCodexUi(bool force = false);
 void updateCodexPose();
 
 void enterCodexMode() {
+  const bool was_playing = audio.playbackActive();
+  if (was_playing) {
+    flushAudioWithSensorGuard();
+    reportPlaybackState(false);
+  } else {
+    // Also clear a response that is buffered but has not crossed its playback
+    // start threshold yet.
+    audio.flush();
+  }
+  // Codex is an exclusive local audio session. Keep the Stack-chan websocket
+  // alive, but neither send its microphone nor accept late speech frames until
+  // the user swipes back to the face.
+  audio.setConversationPaused(true);
+  sendControl("conversation.suspend");
   face.setCodexMode(true);
+  face.setCodexVoiceState(stackchan::CodexVoiceState::idle);
+  face.setCodexArchiveArmed(false);
+  face.setCodexQueuedFollowup(false);
+  codex_queued_followup = false;
+  codex_archive_armed_until_ms = 0;
   syncCodexUi(true);
   // Entering the mode is visual only. Do not turn a navigation gesture into
   // unsolicited servo motion.
@@ -931,24 +967,45 @@ void enterCodexMode() {
 void exitCodexMode() {
   if (codex_mic_pressed) codex.setMicPressed(false);
   codex_mic_pressed = false;
+  codex_submit_pending = false;
+  codex_queued_followup = false;
+  codex_mic_released_ms = 0;
+  codex_sent_feedback_until_ms = 0;
+  codex_archive_armed_until_ms = 0;
+  audio.flush();
+  audio.setConversationPaused(false);
+  sendControl("conversation.resume");
+  face.setCodexVoiceState(stackchan::CodexVoiceState::idle);
+  face.setCodexArchiveArmed(false);
+  face.setCodexQueuedFollowup(false);
   face.setCodexMode(false);
   lights.set(255, 105, 145, 0.08f, stackchan::LightAnimation::solid);
 }
 
 void handleTouch(uint32_t now_ms) {
-  (void)now_ms;
   const auto& detail = M5.Touch.getDetail(0);
   if (face.codexMode()) {
     const auto state = codex.agent(codex.selectedAgent()).state();
-    const bool mic_region = detail.x >= 240 && detail.y >= 176 &&
+    const bool mic_region = detail.y >= 181 &&
                             state != stackchan::CodexAgentState::needs_input;
     if (!codex_mic_pressed && detail.wasPressed() && mic_region) {
+      // Clear every existing local cue before dictation so the laptop receives
+      // the user's voice alone.
+      audio.flush();
+      codex_submit_pending = false;
+      codex_sent_feedback_until_ms = 0;
       codex_mic_pressed = codex.setMicPressed(true);
+      face.setCodexVoiceState(codex_mic_pressed
+                                  ? stackchan::CodexVoiceState::recording
+                                  : stackchan::CodexVoiceState::idle);
       return;
     }
     if (codex_mic_pressed && detail.wasReleased()) {
       codex.setMicPressed(false);
       codex_mic_pressed = false;
+      codex_submit_pending = true;
+      codex_mic_released_ms = millis();
+      face.setCodexVoiceState(stackchan::CodexVoiceState::processing);
       audio.playUiSound(stackchan::UiSoundEffect::mic_release);
       return;
     }
@@ -989,15 +1046,15 @@ void handleTouch(uint32_t now_ms) {
     // Codex is a dedicated control surface. Voice playback and a preceding UI
     // cue must never reinterpret its buttons as conversation interruption.
     // This also lets the user switch away from a speaking/working session.
-    if (x < 52 && y < 48) {
-      exitCodexMode();
-      return;
-    }
-    if (y >= 42 && y <= 94) {
+    if (y <= 56) {
       const int agent = constrain(x / 50, 0, 5);
       // Paint selection immediately; host activation emits its compatible
       // double press afterward and must not delay physical feedback.
       face.setCodexSelectedAgent(static_cast<uint8_t>(agent));
+      codex_archive_armed_until_ms = 0;
+      codex_queued_followup = false;
+      face.setCodexArchiveArmed(false);
+      face.setCodexQueuedFollowup(false);
       audio.playUiSound(codex.connected()
                             ? stackchan::UiSoundEffect::agent_select
                             : stackchan::UiSoundEffect::error,
@@ -1007,31 +1064,63 @@ void handleTouch(uint32_t now_ms) {
       last_codex_motion_state = codex.agent(agent).state();
       return;
     }
-    if (y >= 176) {
+    if (y >= 126) {
       const auto state = codex.agent(codex.selectedAgent()).state();
       if (state == stackchan::CodexAgentState::needs_input) {
         const bool decline = x < 160;
-        const bool sent = codex.sendAction(decline ? 2 : 1);  // NG / OK
+        const bool sent = decline ? codex.decline() : codex.approve();
         audio.playUiSound(sent ? (decline ? stackchan::UiSoundEffect::decline
                                          : stackchan::UiSoundEffect::approve)
                                : stackchan::UiSoundEffect::error);
       } else {
-        const int command = constrain(x / 80, 0, 3);
+        const int command = y < 180 ? constrain(x / 62, 0, 4) : 5;
         bool sent = false;
         auto effect = stackchan::UiSoundEffect::error;
+        if (command != 3) {
+          codex_archive_armed_until_ms = 0;
+          face.setCodexArchiveArmed(false);
+        }
         if (command == 0) {
-          sent = codex.sendAction(0);  // Fast
+          sent = codex.toggleFastMode();
           effect = stackchan::UiSoundEffect::fast;
         }
         if (command == 1) {
-          sent = codex.sendAction(3);  // Plan
-          effect = stackchan::UiSoundEffect::plan;
-        }
-        if (command == 2) {
-          sent = codex.sendAction(4);  // AI / new task
+          sent = codex.startNewChat();
           effect = stackchan::UiSoundEffect::assistant;
         }
-        audio.playUiSound(sent ? effect : stackchan::UiSoundEffect::error);
+        if (command == 2) {
+          sent = codex.continueInNewChat();
+          effect = stackchan::UiSoundEffect::assistant;
+        }
+        if (command == 3) {
+          if (codex_archive_armed_until_ms != 0 &&
+              now_ms < codex_archive_armed_until_ms) {
+            sent = codex.archiveThread();
+            codex_archive_armed_until_ms = 0;
+            face.setCodexArchiveArmed(false);
+            effect = stackchan::UiSoundEffect::approve;
+          } else {
+            codex_archive_armed_until_ms = now_ms + 2500;
+            face.setCodexArchiveArmed(true);
+            sent = true;
+            effect = stackchan::UiSoundEffect::agent_select;
+          }
+        }
+        if (command == 4) {
+          if (!codex_queued_followup ||
+              state != stackchan::CodexAgentState::working) {
+            return;
+          }
+          sent = codex.steerQueuedFollowup();
+          if (sent) {
+            codex_queued_followup = false;
+            face.setCodexQueuedFollowup(false);
+          }
+          effect = stackchan::UiSoundEffect::fast;
+        }
+        if (command != 5) {
+          audio.playUiSound(sent ? effect : stackchan::UiSoundEffect::error);
+        }
         // The microphone is handled as a true press/release above.
       }
       return;
@@ -1071,6 +1160,11 @@ void syncCodexUi(bool force) {
   }
   if (!face.codexMode()) return;
   const auto selected_state = codex.agent(codex.selectedAgent()).state();
+  if (selected_state != stackchan::CodexAgentState::working &&
+      codex_queued_followup) {
+    codex_queued_followup = false;
+    face.setCodexQueuedFollowup(false);
+  }
   switch (selected_state) {
     case stackchan::CodexAgentState::working:
       lights.set(48, 79, 254, 0.24f, stackchan::LightAnimation::chase);
@@ -1093,13 +1187,55 @@ void syncCodexUi(bool force) {
   }
 }
 
-void updateCodexPose() {
+void updateCodexVoice(uint32_t now_ms) {
   if (!face.codexMode()) return;
-  const auto selected_state = codex.agent(codex.selectedAgent()).state();
-  if (selected_state == last_codex_motion_state) return;
-  if (audio.playbackActive() || motion.active() || active_routine_steps != nullptr) {
+  if (codex_archive_armed_until_ms != 0 &&
+      now_ms >= codex_archive_armed_until_ms) {
+    codex_archive_armed_until_ms = 0;
+    face.setCodexArchiveArmed(false);
+  }
+  if (codex_mic_pressed) {
+    face.setCodexVoiceState(stackchan::CodexVoiceState::recording);
     return;
   }
+  if (codex_submit_pending) {
+    const auto host_state = codex.voiceState();
+    face.setCodexVoiceState(host_state == stackchan::CodexVoiceState::completed
+                                ? stackchan::CodexVoiceState::completed
+                                : stackchan::CodexVoiceState::processing);
+    // Prefer the desktop's actual transcription-complete signal. A bounded
+    // fallback preserves submit behavior if lighting is disabled or delayed.
+    const uint32_t elapsed_ms = now_ms - codex_mic_released_ms;
+    const bool completed = host_state == stackchan::CodexVoiceState::completed;
+    if (!stackchan::shouldSubmitCodexDictation(host_state, elapsed_ms)) return;
+    const bool was_working =
+        codex.agent(codex.selectedAgent()).state() ==
+        stackchan::CodexAgentState::working;
+    const bool sent = codex.submitComposer();
+    codex_submit_pending = false;
+    codex_queued_followup = sent && was_working;
+    face.setCodexQueuedFollowup(codex_queued_followup);
+    codex_sent_feedback_until_ms = now_ms + 1000;
+    face.setCodexVoiceState(sent ? stackchan::CodexVoiceState::completed
+                                 : stackchan::CodexVoiceState::idle);
+    Serial.printf("codex-ui: dictation submit sent=%d host_completed=%d\n",
+                  sent, completed);
+    return;
+  }
+  if (codex_sent_feedback_until_ms != 0 &&
+      now_ms >= codex_sent_feedback_until_ms) {
+    codex_sent_feedback_until_ms = 0;
+    face.setCodexVoiceState(stackchan::CodexVoiceState::idle);
+  }
+}
+
+void updateCodexPose() {
+  const auto selected_state = codex.agent(codex.selectedAgent()).state();
+  const bool hardware_busy =
+      audio.playbackActive() || motion.active() || active_routine_steps != nullptr;
+  if (!stackchan::shouldMoveCodexHead(
+          face.codexMode(), static_cast<uint8_t>(selected_state),
+          static_cast<uint8_t>(last_codex_motion_state), hardware_busy)) return;
   // Host state transitions get one restrained pose; touch navigation never
   // enters this path.
   float yaw = 0.0f;
@@ -1162,6 +1298,7 @@ void loop() {
   M5.update();
   codex.update();
   syncCodexUi();
+  updateCodexVoice(now_ms);
   updateCodexPose();
   socket_client.loop();
   if (approval_waiting_until_ms != 0 &&

@@ -80,12 +80,14 @@ bool AudioEndpoint::configureSpeakerCodec(bool enabled) {
     return codec_ok;
   }
   M5.In_I2C.bitOn(kAw9523Address, 0x02, 0b00000100, 400000);
-  // 24 kHz, 16-bit stereo slots (32 BCLKs per frame), conservative volume.
+  // Match M5Unified's CoreS3 AW88298 table exactly for 24 kHz, 16-bit stereo
+  // slots (32 BCLKs per frame). 0x14C7 selects the wrong sample-rate entry and
+  // makes short cues sound unstable even though long speech can mask it.
   return write16Be(kAw88298Address, 0x61, 0x0673) &&
          write16Be(kAw88298Address, 0x04, 0x4040) &&
          write16Be(kAw88298Address, 0x05, 0x0008) &&
-         write16Be(kAw88298Address, 0x06, 0x14C7) &&
-         write16Be(kAw88298Address, 0x0C, 0x0164);
+         write16Be(kAw88298Address, 0x06, 0x14C5) &&
+         write16Be(kAw88298Address, 0x0C, 0x0064);
 }
 
 bool AudioEndpoint::beginDuplex() {
@@ -160,7 +162,19 @@ bool AudioEndpoint::begin() {
 
 bool AudioEndpoint::update() {
   if (duplex_ready_) {
-    if (playback_active_) updateDuplexPlayback();
+    if (playback_active_) {
+      // A UI cue is already complete in memory. Prime the codec DMA in one
+      // loop pass instead of feeding only one 20 ms packet between touch,
+      // display, BLE, and sensor work; that scheduling gap was audible as a
+      // shaky click. Streaming speech keeps its normal incremental pacing.
+      const size_t writes = ui_sound_active_ ? min(playback_count_, size_t{8})
+                                             : size_t{1};
+      for (size_t index = 0; index < writes; ++index) {
+        const size_t queued_before = playback_count_;
+        updateDuplexPlayback();
+        if (playback_count_ == queued_before) break;
+      }
+    }
     if (playback_active_ && playback_response_open_ && !playback_end_received_ &&
         !playback_ducked_ &&
         playback_count_ == 0 && !playback_starvation_latched_ &&
@@ -232,11 +246,6 @@ bool AudioEndpoint::playUiSound(UiSoundEffect effect, uint8_t variant) {
       tones[1] = {1175.0f, 38, 0.62f};
       tone_count = 2;
       break;
-    case UiSoundEffect::plan:
-      tones[0] = {587.0f, 42, 0.48f};
-      tones[1] = {784.0f, 58, 0.56f};
-      tone_count = 2;
-      break;
     case UiSoundEffect::assistant:
       tones[0] = {784.0f, 30, 0.50f};
       tones[1] = {1047.0f, 34, 0.60f};
@@ -276,39 +285,41 @@ bool AudioEndpoint::playUiSound(UiSoundEffect effect, uint8_t variant) {
 
   constexpr float kPeakSample = 6200.0f;
   constexpr size_t kEnvelopeSamples = kOutputRate * 3 / 1000;
+  size_t frame_samples = 0;
   for (size_t note_index = 0; note_index < tone_count; ++note_index) {
     const Tone& tone = tones[note_index];
     const size_t total_samples =
         max(size_t{1}, static_cast<size_t>(tone.duration_ms) * kOutputRate / 1000);
-    for (size_t offset = 0; offset < total_samples;
-         offset += kOutputSamplesPerFrame) {
-      if (playback_count_ >= kPlaybackQueueDepth) return false;
-      const size_t generated_samples =
-          min(kOutputSamplesPerFrame, total_samples - offset);
+    for (size_t position = 0; position < total_samples; ++position) {
       int16_t* frame = playback_queue_[playback_tail_];
-      // The I2S DMA clock consumes fixed 20 ms packets. Sending a 5-18 ms tail
-      // for each note makes the DMA ring run dry between loop iterations and
-      // turns a clean cue into clicks/dropouts. Always enqueue a complete
-      // packet and zero-pad the note tail.
-      for (size_t index = 0; index < generated_samples; ++index) {
-        const size_t position = offset + index;
-        const size_t remaining = total_samples - position - 1;
-        const float attack = min(1.0f, static_cast<float>(position + 1) /
-                                           static_cast<float>(kEnvelopeSamples));
-        const float release = min(1.0f, static_cast<float>(remaining + 1) /
-                                            static_cast<float>(kEnvelopeSamples));
-        const float phase = 2.0f * PI * tone.frequency *
-                            static_cast<float>(position) /
-                            static_cast<float>(kOutputRate);
-        frame[index] = static_cast<int16_t>(
-            sinf(phase) * kPeakSample * tone.amplitude * min(attack, release));
+      const size_t remaining = total_samples - position - 1;
+      const float attack = min(1.0f, static_cast<float>(position + 1) /
+                                         static_cast<float>(kEnvelopeSamples));
+      const float release = min(1.0f, static_cast<float>(remaining + 1) /
+                                          static_cast<float>(kEnvelopeSamples));
+      const float phase = 2.0f * PI * tone.frequency *
+                          static_cast<float>(position) /
+                          static_cast<float>(kOutputRate);
+      frame[frame_samples++] = static_cast<int16_t>(
+          sinf(phase) * kPeakSample * tone.amplitude * min(attack, release));
+      if (frame_samples == kOutputSamplesPerFrame) {
+        playback_lengths_[playback_tail_] = kOutputSamplesPerFrame;
+        playback_tail_ = (playback_tail_ + 1) % kPlaybackQueueDepth;
+        ++playback_count_;
+        frame_samples = 0;
+        if (playback_count_ >= kPlaybackQueueDepth) return false;
       }
-      zeroPadUiSoundFrame(frame, generated_samples, kOutputSamplesPerFrame);
-      playback_lengths_[playback_tail_] = uiSoundPcmFrameLength(
-          generated_samples, kOutputSamplesPerFrame);
-      playback_tail_ = (playback_tail_ + 1) % kPlaybackQueueDepth;
-      ++playback_count_;
     }
+  }
+  if (frame_samples > 0) {
+    int16_t* frame = playback_queue_[playback_tail_];
+    // Only the end of the complete cue is padded. Notes stay adjacent, with
+    // their own 3 ms envelope, instead of acquiring an extra 1-19 ms silence.
+    zeroPadUiSoundFrame(frame, frame_samples, kOutputSamplesPerFrame);
+    playback_lengths_[playback_tail_] =
+        uiSoundPcmFrameLength(frame_samples, kOutputSamplesPerFrame);
+    playback_tail_ = (playback_tail_ + 1) % kPlaybackQueueDepth;
+    ++playback_count_;
   }
   if (playback_count_ == 0) return false;
 
@@ -338,6 +349,7 @@ bool AudioEndpoint::playUiSound(UiSoundEffect effect, uint8_t variant) {
 }
 
 void AudioEndpoint::captureFrame() {
+  if (conversation_paused_) return;
   if (duplex_ready_) {
     captureDuplexFrame();
     return;
@@ -355,7 +367,7 @@ void AudioEndpoint::captureFrame() {
 }
 
 void AudioEndpoint::captureDuplexFrame() {
-  if (!connected_ || !microphone_active_) return;
+  if (conversation_paused_ || !connected_ || !microphone_active_) return;
   size_t bytes_read = 0;
   const esp_err_t error = i2s_read(
       I2S_NUM_1, duplex_input_, sizeof(duplex_input_), &bytes_read, 0);
@@ -471,6 +483,9 @@ void AudioEndpoint::updateDuplexPlayback() {
 }
 
 void AudioEndpoint::playFrame(const uint8_t* payload, size_t length) {
+  // Codex mode owns the speaker and microphone. Discard late Stack-chan voice
+  // frames instead of letting them cover tactile control feedback.
+  if (conversation_paused_) return;
   if (!validAudioHeader(payload, length)) return;
   const auto* header = reinterpret_cast<const AudioHeader*>(payload);
   if (header->stream != static_cast<uint8_t>(AudioStream::speaker)) return;

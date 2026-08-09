@@ -14,6 +14,7 @@ def test_firmware_interaction_policy_executes_on_host(tmp_path: Path) -> None:
         r'''
 #include <cassert>
 #include "InteractionPolicy.hpp"
+#include "CodexInteractionPolicy.hpp"
 
 using stackchan::ScreenTapRoute;
 
@@ -52,6 +53,40 @@ int main() {
   stackchan::zeroPadUiSoundFrame(frame, 3, 8);
   assert(frame[0] == 11 && frame[1] == 22 && frame[2] == 33);
   for (int index = 3; index < 8; ++index) assert(frame[index] == 0);
+
+  // Current ChatGPT defaults: Fast, approval pair, New Chat, and Send.
+  using stackchan::CodexAction;
+  assert(stackchan::codexActionIndex(CodexAction::fast) == 6);
+  assert(stackchan::codexActionIndex(CodexAction::approve) == 7);
+  assert(stackchan::codexActionIndex(CodexAction::decline) == 8);
+  assert(stackchan::codexActionIndex(CodexAction::continue_in_new_chat) == 9);
+  assert(stackchan::codexActionIndex(CodexAction::submit) == 12);
+  assert(stackchan::kCodexArchiveModifiers == 0x0A);
+  assert(stackchan::kCodexArchiveKey == 0x04);
+  assert(stackchan::kCodexNewChatModifiers == 0x08);
+  assert(stackchan::kCodexNewChatKey == 0x11);
+  // Voice lighting is the completion handshake for reliable auto-submit.
+  auto recording = stackchan::decodeCodexVoiceLighting(2, 0x2E8B57);
+  auto processing = stackchan::decodeCodexVoiceLighting(2, 0xFFFFFF);
+  auto completed = stackchan::decodeCodexVoiceLighting(1, 0xFFFFFF);
+  auto unrelated = stackchan::decodeCodexVoiceLighting(2, 0x304FFE);
+  assert(recording.recognized && recording.state == stackchan::CodexVoiceState::recording);
+  assert(processing.recognized && processing.state == stackchan::CodexVoiceState::processing);
+  assert(completed.recognized && completed.state == stackchan::CodexVoiceState::completed);
+  assert(!unrelated.recognized);
+  assert(!stackchan::shouldSubmitCodexDictation(
+      stackchan::CodexVoiceState::processing, 5999));
+  assert(stackchan::shouldSubmitCodexDictation(
+      stackchan::CodexVoiceState::completed, 100));
+  assert(stackchan::shouldSubmitCodexDictation(
+      stackchan::CodexVoiceState::processing, 6000));
+
+  // Selecting another slot copies that slot's state into last_motion_state;
+  // equal states must never schedule a servo move.
+  assert(!stackchan::shouldMoveCodexHead(true, 2, 2, false));
+  assert(stackchan::shouldMoveCodexHead(true, 2, 1, false));
+  assert(!stackchan::shouldMoveCodexHead(true, 2, 1, true));
+  assert(!stackchan::shouldMoveCodexHead(false, 2, 1, false));
   return 0;
 }
 '''.strip()

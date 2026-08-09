@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from .codex_sessions import recent_codex_titles
 from .config import PROJECT_ROOT, Settings
 from .echo import EchoCanceller
 from .eve_provider import EveLLM
@@ -1404,6 +1405,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         barge_raw_microphone = bytearray()
         max_microphone_bytes = settings.input_sample_rate * 2 * 16
         auto_turn_detection = settings.auto_turn_detection and settings.provider != "mock"
+        conversation_suspended = False
+        conversation_resumed = asyncio.Event()
+        conversation_resumed.set()
         turn_task: asyncio.Task[None] | None = None
         sensor_task: asyncio.Task[None] | None = None
         scheduled_worker_task: asyncio.Task[None] | None = None
@@ -2729,6 +2733,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 scheduled = await queue.get()
                 reaction_task: asyncio.Task[bool] | None = None
                 try:
+                    # Codex owns the device while its control surface is open.
+                    # Preserve due work in the queue until Stack-chan resumes.
+                    await conversation_resumed.wait()
                     deadline = asyncio.get_running_loop().time() + 60.0
                     while (
                         (turn_task is not None and not turn_task.done())
@@ -2804,6 +2811,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         async def start_turn(audio: bytes) -> None:
             nonlocal sensor_task, turn_task
+            if conversation_suspended:
+                return
             if len(audio) < settings.input_sample_rate // 2:
                 await send_text(
                     control("error", code="empty_turn", detail="not enough speech audio").encode()
@@ -2838,6 +2847,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if not authenticated:
                         await websocket.close(code=1008, reason="pairing required")
                         break
+                    if conversation_suspended:
+                        # Firmware also stops capture, but discard an in-flight
+                        # frame at the source boundary instead of letting it
+                        # seed VAD after resume.
+                        continue
                     binary = message["bytes"]
                     if binary.startswith(b"STKI"):
                         image = ImageFrame.decode(binary)
@@ -3349,6 +3363,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 elif not authenticated:
                     await websocket.close(code=1008, reason="pairing required")
                     break
+                elif command.type == "conversation.suspend":
+                    conversation_suspended = True
+                    conversation_resumed.clear()
+                    microphone.clear()
+                    barge_microphone.clear()
+                    barge_clean_microphone.clear()
+                    barge_raw_microphone.clear()
+                    turn_detector.reset()
+                    duck_detector.reset()
+                    await stop_playback("codex_mode")
+                    await send_text(
+                        control("session.state", state="suspended", owner="codex").encode()
+                    )
+                    titles = await asyncio.to_thread(recent_codex_titles)
+                    if titles:
+                        await send_text(control("codex.sessions", titles=titles).encode())
+                    if device_id:
+                        results_for(device_id).append(
+                            {
+                                "type": "telemetry",
+                                "component": "conversation_session",
+                                "state": "suspended",
+                                "owner": "codex",
+                                "received_monotonic_ns": time.perf_counter_ns(),
+                            }
+                        )
+                elif command.type == "conversation.resume":
+                    conversation_suspended = False
+                    microphone.clear()
+                    barge_microphone.clear()
+                    barge_clean_microphone.clear()
+                    barge_raw_microphone.clear()
+                    turn_detector.reset()
+                    duck_detector.reset()
+                    playback_abort.clear()
+                    sensor_cancel.clear()
+                    resume_playback_stream()
+                    conversation_resumed.set()
+                    await send_text(control("session.state", state="idle").encode())
+                    if device_id:
+                        results_for(device_id).append(
+                            {
+                                "type": "telemetry",
+                                "component": "conversation_session",
+                                "state": "resumed",
+                                "owner": "stackchan",
+                                "received_monotonic_ns": time.perf_counter_ns(),
+                            }
+                        )
                 elif command.type == "turn.commit":
                     audio = bytes(microphone)
                     microphone.clear()
@@ -3361,6 +3424,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     turn_detector.reset()
                 elif command.type == "ping":
                     await send_text(control("pong", **command.payload).encode())
+                elif command.type == "sensor.head" and conversation_suspended:
+                    if device_id:
+                        results_for(device_id).append(
+                            {
+                                "type": "telemetry",
+                                "component": "sensor_head_suppressed",
+                                "gesture": str(command.payload.get("gesture", "touch")),
+                                "reason": "conversation_suspended",
+                                "received_monotonic_ns": time.perf_counter_ns(),
+                            }
+                        )
                 elif command.type == "sensor.head":
                     gesture = str(command.payload.get("gesture", "touch"))
                     loop_now = asyncio.get_running_loop().time()

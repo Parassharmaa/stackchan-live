@@ -59,6 +59,7 @@ uint8_t kReportMap[] = {
 CodexBleController* g_controller = nullptr;
 NimBLEServer* g_server = nullptr;
 NimBLEHIDDevice* g_hid = nullptr;
+NimBLECharacteristic* g_keyboard_input = nullptr;
 NimBLECharacteristic* g_vendor_input = nullptr;
 
 class OutputCallbacks : public NimBLECharacteristicCallbacks {
@@ -150,7 +151,8 @@ bool CodexBleController::begin() {
   const uint8_t consumer_idle[2] = {};
   const uint8_t pointer_idle[5] = {};
   const uint8_t vendor_idle[kReportLength] = {};
-  g_hid->getInputReport(1)->setValue(keyboard_idle, sizeof(keyboard_idle));
+  g_keyboard_input = g_hid->getInputReport(1);
+  g_keyboard_input->setValue(keyboard_idle, sizeof(keyboard_idle));
   g_hid->getInputReport(2)->setValue(consumer_idle, sizeof(consumer_idle));
   g_hid->getInputReport(3)->setValue(pointer_idle, sizeof(pointer_idle));
   g_vendor_input = g_hid->getInputReport(kVendorReportId);
@@ -206,7 +208,9 @@ void CodexBleController::selectAgent(uint8_t index) {
 bool CodexBleController::sendAction(uint8_t index) {
   char key[6];
   snprintf(key, sizeof(key), "ACT%02u", index);
-  return sendTap(key);
+  const bool sent = sendTap(key);
+  Serial.printf("codex-ble: action key=%s sent=%d\n", key, sent);
+  return sent;
 }
 
 bool CodexBleController::sendTap(const char* key) {
@@ -219,7 +223,46 @@ bool CodexBleController::setMicPressed(bool pressed) {
   const bool sent_10 = sendKey("ACT10", pressed);
   delay(12);
   const bool sent_11 = sendKey("ACT11", pressed);
-  return sent_10 && sent_11;
+  if (pressed && sent_10 && sent_11) {
+    // A new gesture must not inherit the previous completed-lighting state.
+    voice_state_ = CodexVoiceState::recording;
+    ui_dirty_ = true;
+  }
+  const bool sent = sent_10 && sent_11;
+  Serial.printf("codex-ble: mic pressed=%d sent=%d\n", pressed, sent);
+  return sent;
+}
+
+bool CodexBleController::archiveThread() {
+  const bool sent = sendKeyboardChord(kCodexArchiveModifiers, kCodexArchiveKey);
+  Serial.printf("codex-ble: archive shortcut sent=%d\n", sent);
+  return sent;
+}
+
+bool CodexBleController::startNewChat() {
+  const bool sent = sendKeyboardChord(kCodexNewChatModifiers, kCodexNewChatKey);
+  Serial.printf("codex-ble: new-chat shortcut sent=%d\n", sent);
+  return sent;
+}
+
+bool CodexBleController::steerQueuedFollowup() {
+  // The Codex desktop has a dedicated Micro HID path for ACT12: with an empty
+  // composer and a queued follow-up, it promotes the first queued message into
+  // the active turn. A keyboard chord does not enter that path.
+  const bool sent = submitComposer();
+  Serial.printf("codex-ble: queued steer sent=%d\n", sent);
+  return sent;
+}
+
+bool CodexBleController::sendKeyboardChord(uint8_t modifiers, uint8_t key) {
+  if (!connected_ || g_keyboard_input == nullptr) return false;
+  uint8_t pressed[8] = {modifiers, 0, key, 0, 0, 0, 0, 0};
+  g_keyboard_input->setValue(pressed, sizeof(pressed));
+  const bool down = g_keyboard_input->notify();
+  delay(16);
+  const uint8_t released[8] = {};
+  g_keyboard_input->setValue(released, sizeof(released));
+  return g_keyboard_input->notify() && down;
 }
 
 bool CodexBleController::sendKey(const char* key, bool pressed) {
@@ -306,7 +349,24 @@ void CodexBleController::processRpc(const char* json) {
   if (params.isNull()) params = request["p"];
   Serial.printf("codex-ble: rpc method=%s id=%d\n", method, id);
   if (strcmp(method, "v.oai.thstatus") == 0) applyAgentStatus(params);
+  if (strcmp(method, "v.oai.rgbcfg") == 0) applyVoiceStatus(params);
   if (id >= 0 && method[0] != '\0') sendRpcResponse(method, id);
+}
+
+void CodexBleController::applyVoiceStatus(const JsonVariantConst& params) {
+  JsonVariantConst ambient = params["ambient"];
+  if (ambient.isNull()) return;
+  const uint8_t effect = ambient["e"] | 0;
+  const uint32_t color = ambient["c"] | 0U;
+  // ChatGPT's current Codex Micro service encodes voice state into its ambient
+  // lighting config: sea-green snake=recording, white snake=processing, and
+  // solid white=completed. Other colors belong to agent status lighting.
+  const CodexVoiceSignal signal = decodeCodexVoiceLighting(effect, color);
+  if (!signal.recognized || voice_state_ == signal.state) return;
+  voice_state_ = signal.state;
+  ui_dirty_ = true;
+  Serial.printf("codex-ble: voice-state=%u\n",
+                static_cast<unsigned>(signal.state));
 }
 
 void CodexBleController::applyAgentStatus(const JsonVariantConst& params) {

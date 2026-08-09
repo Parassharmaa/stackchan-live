@@ -25,6 +25,56 @@ struct Asset {
   size_t length;
 };
 
+void drawBoltIcon(M5Canvas& canvas, int cx, int cy, uint16_t color) {
+  canvas.fillTriangle(cx + 2, cy - 14, cx - 9, cy + 1, cx - 1, cy + 1,
+                      color);
+  canvas.fillTriangle(cx - 2, cy - 1, cx + 9, cy - 1, cx - 4, cy + 14,
+                      color);
+}
+
+void drawNewChatIcon(M5Canvas& canvas, int cx, int cy, uint16_t color) {
+  canvas.drawRoundRect(cx - 13, cy - 11, 26, 20, 6, color);
+  canvas.drawLine(cx - 8, cy + 9, cx - 12, cy + 14, color);
+  canvas.drawLine(cx - 8, cy + 9, cx - 3, cy + 9, color);
+  canvas.fillRect(cx - 1, cy - 6, 3, 13, color);
+  canvas.fillRect(cx - 6, cy - 1, 13, 3, color);
+}
+
+void drawForkIcon(M5Canvas& canvas, int cx, int cy, uint16_t color) {
+  canvas.fillRect(cx - 11, cy - 10, 3, 21, color);
+  canvas.drawLine(cx - 9, cy, cx + 7, cy - 10, color);
+  canvas.drawLine(cx - 8, cy + 1, cx + 8, cy + 11, color);
+  canvas.fillCircle(cx - 10, cy - 11, 4, color);
+  canvas.fillCircle(cx + 10, cy - 12, 4, color);
+  canvas.fillCircle(cx + 10, cy + 12, 4, color);
+}
+
+void drawArchiveIcon(M5Canvas& canvas, int cx, int cy, uint16_t color) {
+  canvas.drawRoundRect(cx - 13, cy + 1, 26, 13, 3, color);
+  canvas.fillRoundRect(cx - 15, cy - 4, 30, 5, 2, color);
+  canvas.fillRect(cx - 1, cy - 13, 3, 12, color);
+  canvas.fillTriangle(cx - 6, cy - 3, cx + 6, cy - 3, cx, cy + 4, color);
+  canvas.fillRect(cx - 5, cy + 7, 10, 2, color);
+}
+
+void drawSteerIcon(M5Canvas& canvas, int cx, int cy, uint16_t color) {
+  canvas.fillRect(cx - 13, cy + 7, 10, 3, color);
+  canvas.fillRect(cx - 5, cy - 8, 3, 18, color);
+  canvas.fillRect(cx - 3, cy - 8, 14, 3, color);
+  canvas.fillTriangle(cx + 8, cy - 13, cx + 8, cy - 2, cx + 15, cy - 8,
+                      color);
+}
+
+void drawMicIcon(M5Canvas& canvas, int cx, int cy, uint16_t color) {
+  canvas.drawRoundRect(cx - 7, cy - 13, 14, 21, 7, color);
+  canvas.drawRoundRect(cx - 6, cy - 12, 12, 19, 6, color);
+  canvas.drawLine(cx - 12, cy + 1, cx - 12, cy + 6, color);
+  canvas.drawLine(cx + 12, cy + 1, cx + 12, cy + 6, color);
+  canvas.drawArc(cx, cy + 5, 12, 10, 0, 180, color);
+  canvas.fillRect(cx - 1, cy + 14, 3, 7, color);
+  canvas.fillRoundRect(cx - 8, cy + 20, 17, 3, 1, color);
+}
+
 }  // namespace
 
 FaceRenderer::FaceRenderer(M5GFX& display)
@@ -116,6 +166,11 @@ void FaceRenderer::setCodexAgentState(uint8_t index, CodexAgentState state,
   if (index >= codex_agent_states_.size()) return;
   codex_agent_states_[index] = state;
   codex_agent_colors_[index] = color;
+}
+
+void FaceRenderer::setCodexAgentTitle(uint8_t index, const String& title) {
+  if (index >= codex_agent_titles_.size()) return;
+  codex_agent_titles_[index] = title;
 }
 
 void FaceRenderer::update(uint32_t now_ms) {
@@ -254,97 +309,151 @@ void FaceRenderer::drawCodex(uint32_t now_ms) {
   canvas_.setTextDatum(textdatum_t::middle_center);
   canvas_.setTextSize(1);
 
-  canvas_.fillRoundRect(8, 7, 36, 28, 10, color565(kCodexPanel));
-  canvas_.setTextColor(color565(kCodexText));
-  canvas_.drawString("<", 26, 21);
-  canvas_.setTextColor(color565(kCodexText));
-  canvas_.drawString("CODEX CONTROL", 146, 16);
-  const uint32_t connection_color = codex_connected_ ? 0x00FF4C : 0xFF6D00;
-  canvas_.fillRoundRect(256, 7, 56, 28, 10, color565(0x25283A));
-  canvas_.fillCircle(268, 21, 4, color565(connection_color));
-  canvas_.setTextColor(color565(connection_color));
-  canvas_.drawString(codex_connected_ ? "LIVE" : "PAIR", 290, 21);
-
-  constexpr int agent_x[6] = {34, 84, 134, 184, 234, 284};
+  constexpr int agent_x[6] = {30, 82, 134, 186, 238, 290};
   for (uint8_t index = 0; index < 6; ++index) {
     const uint32_t color = stateColor(index);
     const bool selected = index == codex_selected_agent_;
     const bool pulse = codex_agent_states_[index] == CodexAgentState::working ||
                        codex_agent_states_[index] == CodexAgentState::needs_input;
-    const int radius = selected ? 18 : 15;
+    const int radius = selected ? 22 : 19;
     if (pulse) {
-      const int halo = 18 + static_cast<int>((now_ms / 180) % 3);
-      canvas_.drawCircle(agent_x[index], 67, halo, color565(color));
+      const int halo = 23 + static_cast<int>((now_ms / 180) % 3);
+      canvas_.drawCircle(agent_x[index], 28, halo, color565(color));
     }
-    canvas_.fillCircle(agent_x[index], 67, radius, color565(color));
+    canvas_.fillCircle(agent_x[index], 28, radius, color565(color));
     canvas_.setTextColor(color565(color == 0xFFFFFF ? 0x11121A : 0xFFFFFF));
-    canvas_.drawNumber(index + 1, agent_x[index], 67);
+    canvas_.setTextSize(selected ? 2 : 1);
+    canvas_.drawNumber(index + 1, agent_x[index], 28);
+    canvas_.setTextSize(1);
     if (selected) {
-      canvas_.drawRoundRect(agent_x[index] - 22, 43, 44, 48, 14,
-                            color565(kCodexAccent));
+      canvas_.drawCircle(agent_x[index], 28, 25, color565(kCodexAccent));
     }
   }
 
   const CodexAgentState selected_state = codex_agent_states_[codex_selected_agent_];
   const uint32_t selected_color = stateColor(codex_selected_agent_);
-  canvas_.fillRoundRect(12, 99, 296, 70, 18, color565(kCodexPanel));
-  canvas_.fillRoundRect(22, 108, 70, 52, 17, color565(0x292D42));
-  canvas_.drawRoundRect(22, 108, 70, 52, 17, color565(selected_color));
+  canvas_.fillRoundRect(12, 59, 296, 63, 17, color565(kCodexPanel));
+  canvas_.fillRoundRect(22, 64, 64, 53, 15, color565(0x292D42));
+  canvas_.drawRoundRect(22, 64, 64, 53, 15, color565(selected_color));
   // A tiny original Stack-chan face keeps the control surface expressive.
   const int face_center_x = 57;
-  const int face_center_y = 134;
   const uint16_t face_ink = color565(kCodexText);
   if (selected_state == CodexAgentState::complete) {
-    canvas_.drawLine(42, 129, 48, 132, face_ink);
-    canvas_.drawLine(66, 132, 72, 129, face_ink);
-    canvas_.drawLine(47, 141, 56, 146, face_ink);
-    canvas_.drawLine(56, 146, 67, 140, face_ink);
+    canvas_.drawLine(42, 84, 48, 87, face_ink);
+    canvas_.drawLine(66, 87, 72, 84, face_ink);
+    canvas_.drawLine(47, 99, 56, 104, face_ink);
+    canvas_.drawLine(56, 104, 67, 98, face_ink);
   } else if (selected_state == CodexAgentState::error) {
-    canvas_.fillCircle(46, 130, 2, face_ink);
-    canvas_.fillCircle(68, 130, 2, face_ink);
-    canvas_.drawLine(48, 146, 57, 141, face_ink);
-    canvas_.drawLine(57, 141, 66, 146, face_ink);
+    canvas_.fillCircle(46, 85, 2, face_ink);
+    canvas_.fillCircle(68, 85, 2, face_ink);
+    canvas_.drawLine(48, 104, 57, 99, face_ink);
+    canvas_.drawLine(57, 99, 66, 104, face_ink);
   } else if (selected_state == CodexAgentState::needs_input) {
-    canvas_.fillCircle(46, 130, 2, face_ink);
-    canvas_.fillCircle(68, 130, 2, face_ink);
+    canvas_.fillCircle(46, 85, 2, face_ink);
+    canvas_.fillCircle(68, 85, 2, face_ink);
     canvas_.setTextColor(color565(selected_color));
     canvas_.setTextSize(2);
-    canvas_.drawString("?", face_center_x, 143);
+    canvas_.drawString("?", face_center_x, 99);
     canvas_.setTextSize(1);
   } else {
     const int blink_offset = selected_state == CodexAgentState::working
                                  ? static_cast<int>((now_ms / 300) % 2)
                                  : 0;
-    canvas_.fillCircle(46, 130 + blink_offset, 2, face_ink);
-    canvas_.fillCircle(68, 130 - blink_offset, 2, face_ink);
-    canvas_.drawLine(51, 142, 63, 142, face_ink);
+    canvas_.fillCircle(46, 85 + blink_offset, 2, face_ink);
+    canvas_.fillCircle(68, 85 - blink_offset, 2, face_ink);
+    canvas_.drawLine(51, 99, 63, 99, face_ink);
   }
   canvas_.setTextDatum(textdatum_t::top_left);
   canvas_.setTextColor(color565(kCodexMuted));
-  canvas_.drawString(String("ACTIVE AGENT  ") + (codex_selected_agent_ + 1),
-                     106, 112);
+  String title = codex_agent_titles_[codex_selected_agent_];
+  if (title.isEmpty()) title = String("TASK ") + (codex_selected_agent_ + 1);
+  title.replace("\n", " ");
+  if (title.length() > 31) title = title.substring(0, 28) + "...";
+  canvas_.drawString(title, 100, 69);
   canvas_.setTextColor(color565(kCodexText));
   canvas_.setTextSize(2);
-  canvas_.drawString(codexAgentStateName(selected_state), 106, 132);
+  canvas_.drawString(codexAgentStateName(selected_state), 100, 91);
   canvas_.setTextSize(1);
   canvas_.setTextDatum(textdatum_t::middle_center);
 
   const bool approval = selected_state == CodexAgentState::needs_input;
   if (approval) {
-    canvas_.fillRoundRect(8, 181, 148, 51, 15, color565(0x521B2B));
-    canvas_.fillRoundRect(164, 181, 148, 51, 15, color565(0x12452C));
-    canvas_.setTextColor(color565(0xFF9AB2));
-    canvas_.drawString("DECLINE", 82, 206);
-    canvas_.setTextColor(color565(0x73FF9E));
-    canvas_.drawString("APPROVE", 238, 206);
+    canvas_.fillRoundRect(8, 130, 148, 102, 17, color565(0x521B2B));
+    canvas_.fillRoundRect(164, 130, 148, 102, 17, color565(0x12452C));
+    const uint16_t decline_ink = color565(0xFF9AB2);
+    const uint16_t approve_ink = color565(0x73FF9E);
+    canvas_.drawCircle(82, 181, 20, decline_ink);
+    canvas_.drawLine(72, 171, 92, 191, decline_ink);
+    canvas_.drawLine(92, 171, 72, 191, decline_ink);
+    canvas_.drawCircle(238, 181, 20, approve_ink);
+    canvas_.drawLine(226, 181, 235, 190, approve_ink);
+    canvas_.drawLine(235, 190, 252, 171, approve_ink);
   } else {
-    const char* labels[4] = {"FAST", "PLAN", "AI", "HOLD MIC"};
-    for (int index = 0; index < 4; ++index) {
-      const int x = 8 + index * 78;
-      canvas_.fillRoundRect(x, 181, 70, 51, 15,
-                            color565(index == 3 ? 0x39253E : kCodexPanel));
-      canvas_.setTextColor(color565(index == 3 ? kCodexAccent : kCodexText));
-      canvas_.drawString(labels[index], x + 35, 206);
+    // Five compact icon keys keep utility actions available without spending
+    // scarce pixels on labels. The wide mic below remains the clear primary
+    // action, matching the physical hierarchy of a dedicated controller.
+    for (int index = 0; index < 5; ++index) {
+      const int x = 8 + index * 62;
+      uint32_t fill = kCodexPanel;
+      uint32_t icon = kCodexText;
+      if (index == 3 && codex_archive_armed_) {
+        fill = 0x543716;
+        icon = 0xFFD38A;
+      }
+      const bool steer_ready = index == 4 && codex_queued_followup_ &&
+                               selected_state == CodexAgentState::working;
+      if (index == 4 && steer_ready) {
+        fill = 0x233B63;
+        icon = 0x9CC7FF;
+      } else if (index == 4) {
+        fill = 0x191B26;
+        icon = 0x5E6375;
+      }
+      canvas_.fillRoundRect(x, 128, 56, 48, 14, color565(fill));
+      canvas_.drawRoundRect(x, 128, 56, 48, 14, color565(0x303446));
+      canvas_.setTextColor(color565(icon));
+      const uint16_t ink = color565(kCodexText);
+      if (index == 0) {
+        drawBoltIcon(canvas_, x + 28, 152, ink);
+      } else if (index == 1) {
+        drawNewChatIcon(canvas_, x + 28, 152, ink);
+      } else if (index == 2) {
+        drawForkIcon(canvas_, x + 28, 152, ink);
+      } else if (index == 3) {
+        drawArchiveIcon(canvas_, x + 28, 152, color565(icon));
+      } else {
+        const uint16_t steer_ink = color565(icon);
+        drawSteerIcon(canvas_, x + 28, 152, steer_ink);
+        if (steer_ready) canvas_.fillCircle(x + 43, 166, 3, steer_ink);
+      }
+    }
+
+    uint32_t mic_color = 0x39253E;
+    uint32_t mic_text = kCodexAccent;
+    if (codex_voice_state_ == CodexVoiceState::recording) {
+      mic_color = 0x5A1734;
+      mic_text = 0xFFABC7;
+    } else if (codex_voice_state_ == CodexVoiceState::processing) {
+      mic_color = 0x29334D;
+      mic_text = 0xB9C8FF;
+    } else if (codex_voice_state_ == CodexVoiceState::completed) {
+      mic_color = 0x174531;
+      mic_text = 0x8BFFBC;
+    }
+    canvas_.fillRoundRect(8, 184, 304, 48, 15, color565(mic_color));
+    canvas_.drawRoundRect(8, 184, 304, 48, 15, color565(0x593B60));
+    canvas_.setTextColor(color565(mic_text));
+    const uint16_t mic_ink = color565(mic_text);
+    drawMicIcon(canvas_, 160, 207, mic_ink);
+    if (codex_voice_state_ == CodexVoiceState::processing) {
+      const int active_dot = static_cast<int>((now_ms / 220) % 3);
+      for (int dot = 0; dot < 3; ++dot) {
+        canvas_.fillCircle(185 + dot * 7, 208, 2,
+                           color565(dot == active_dot ? 0xFFFFFF : 0x586383));
+      }
+    } else if (codex_voice_state_ == CodexVoiceState::recording) {
+      canvas_.drawCircle(160, 207, 20 + static_cast<int>((now_ms / 180) % 3),
+                         mic_ink);
     }
   }
   canvas_.pushSprite(0, 0);

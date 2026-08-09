@@ -5,6 +5,8 @@
 
 #include <array>
 
+#include "CodexInteractionPolicy.hpp"
+
 namespace stackchan {
 
 enum class CodexAgentState : uint8_t {
@@ -43,6 +45,21 @@ class CodexBleController {
 
   bool sendAction(uint8_t index);
   bool setMicPressed(bool pressed);
+  bool toggleFastMode() {
+    return sendAction(codexActionIndex(CodexAction::fast));
+  }
+  bool approve() { return sendAction(codexActionIndex(CodexAction::approve)); }
+  bool decline() { return sendAction(codexActionIndex(CodexAction::decline)); }
+  bool continueInNewChat() {
+    return sendAction(codexActionIndex(CodexAction::continue_in_new_chat));
+  }
+  bool startNewChat();
+  bool steerQueuedFollowup();
+  bool archiveThread();
+  bool submitComposer() {
+    return sendAction(codexActionIndex(CodexAction::submit));
+  }
+  CodexVoiceState voiceState() const { return voice_state_; }
 
   // Called from NimBLE callbacks. JSON parsing is deliberately deferred to
   // update(), which runs on the Arduino loop task.
@@ -54,15 +71,18 @@ class CodexBleController {
  private:
   bool sendTap(const char* key);
   bool sendKey(const char* key, bool pressed);
+  bool sendKeyboardChord(uint8_t modifiers, uint8_t key);
   bool sendFramedJson(const String& json, bool append_crlf);
   void processRpc(const char* json);
   void sendRpcResponse(const char* method, int id);
   void applyAgentStatus(const JsonVariantConst& params);
+  void applyVoiceStatus(const JsonVariantConst& params);
 
   std::array<CodexAgentStatus, kAgentCount> agents_{};
   uint8_t selected_agent_ = 0;
   volatile bool connected_ = false;
   volatile bool ui_dirty_ = true;
+  volatile CodexVoiceState voice_state_ = CodexVoiceState::idle;
   String rx_buffer_;
   void* rpc_queue_ = nullptr;
 };
