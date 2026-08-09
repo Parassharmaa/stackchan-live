@@ -28,8 +28,18 @@ pytest = ">=8.4,<9"
 pytest-asyncio = ">=1.1,<2"
 ruff = ">=0.12,<1"
 
+[feature.maai.pypi-dependencies]
+# Pin upstream because the shared-encoder MaaiMultiple API is newer than the
+# last PyPI release. This stays outside the default realtime environment.
+maai = { git = "https://github.com/MaAI-Kyoto/MaAI.git", rev = "4335c43268747acc6080f56e3e072af22a46916d" }
+# Stack-chan supplies PCM over IPC and never lets MaAI open the Mac microphone.
+# This pure-Python compatibility package avoids PyAudio's broken space-path
+# source build while deliberately failing if direct microphone capture is used.
+pyaudio = { path = "compat/pyaudio-headless" }
+
 [environments]
 default = { features = ["dev"], solve-group = "default" }
+maai = { features = ["dev", "maai"], solve-group = "maai" }
 
 [tasks.test]
 cmd = "pytest -q server/tests"
@@ -95,6 +105,9 @@ cmd = "python scripts/benchmark_local_pipeline.py --output artifacts/benchmarks/
 
 [tasks.benchmark-realtime]
 cmd = "python scripts/benchmark_realtime_provider.py"
+
+[tasks.benchmark-maai]
+cmd = "python scripts/benchmark_maai_bridge.py --output artifacts/benchmarks/maai-latest.json"
 
 [tasks.benchmark-tts-steps]
 cmd = "python scripts/benchmark_tts_steps.py"

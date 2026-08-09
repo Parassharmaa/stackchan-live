@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     input_sample_rate: int = 16_000
     output_sample_rate: int = 24_000
     audio_frame_ms: int = 20
+    # MaAI is an optional, isolated attentive-listening sidecar. Its large ML
+    # dependencies never enter the normal voice server process or environment.
+    maai_enabled: bool = False
+    maai_shadow_mode: bool = True
+    maai_frame_rate: float = Field(default=10.0, ge=5.0, le=20.0)
+    maai_backchannel_threshold: float = Field(default=0.72, ge=0.0, le=1.0)
+    maai_nod_threshold: float = Field(default=0.68, ge=0.0, le=1.0)
+    maai_backchannel_cooldown_ms: int = Field(default=2400, ge=500, le=15_000)
+    maai_nod_cooldown_ms: int = Field(default=1800, ge=500, le=15_000)
     # Send a bounded initial burst so the device starts at its existing
     # 16-frame threshold but retains enough queued audio to survive a local
     # Whisper scheduling stall. Forty 20 ms frames remain well below the

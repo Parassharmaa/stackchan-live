@@ -47,6 +47,9 @@ the current filenames.
 - Runtime dependencies are pinned in `pixi.lock` and
   `intelligence/package-lock.json`; their own upstream licenses continue to
   apply.
+- The optional MaAI code and selected MIT model checkpoints are pinned but not
+  redistributed. The headless PyAudio compatibility module is original project
+  code and deliberately cannot open a microphone.
 - The original project code and artwork use the root MIT license. The bundled
   M5Stack mechanical assets retain their separate upstream MIT copyright and
   notice.

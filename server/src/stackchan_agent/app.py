@@ -25,6 +25,7 @@ from .local_providers import (
     WhisperServerSTT,
     WhisperTranscription,
 )
+from .maai_runtime import MaaiBehaviorArbiter, MaaiDecision, MaaiRuntime
 from .memory import MemoryStore, SensitiveMemoryError
 from .music import music_duration_seconds, signature_jingle
 from .pipeline import CascadePipeline, meaningful_transcript, take_speakable_phrase
@@ -818,11 +819,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         steps=settings.supertonic_steps,
         speed=settings.supertonic_speed,
     )
+    maai_runtime = MaaiRuntime(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         schedule_dispatch_task: asyncio.Task[None] | None = None
         try:
+            await maai_runtime.start()
             if settings.provider == "cascade":
                 await asyncio.gather(
                     whisper_process.start(),
@@ -860,6 +863,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 whisper_ja_process.stop(),
             )
             await supertonic_process.stop()
+            await maai_runtime.stop()
             schedules.close()
             memory.close()
 
@@ -867,6 +871,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.memory = memory
     app.state.schedules = schedules
+    app.state.maai = maai_runtime
     active_devices: dict[str, WebSocket] = {}
     device_send_locks: dict[str, asyncio.Lock] = {}
     proactive_queues: dict[str, asyncio.Queue[Schedule]] = {}
@@ -1075,6 +1080,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "provider": settings.provider,
                 "models": models,
                 "dependencies": dependencies,
+                "optional": {"maai": maai_runtime.health()},
             },
         )
 
@@ -1399,6 +1405,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings.barge_in_duck_ms, settings.audio_frame_ms
         )
         echo = EchoCanceller(delay_ms=settings.aec_delay_ms, enabled=settings.aec_enabled)
+        maai_arbiter = MaaiBehaviorArbiter(settings)
         microphone = bytearray()
         barge_microphone = bytearray()
         barge_clean_microphone = bytearray()
@@ -1457,6 +1464,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         send_lock = asyncio.Lock()
         pending_tool_results: dict[str, asyncio.Future[dict]] = {}
         active_motion_request_ids: set[str] = set()
+        maai_behavior_tasks: set[asyncio.Task[None]] = set()
 
         def pause_playback_stream() -> None:
             nonlocal playback_pause_started
@@ -1495,6 +1503,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     return False
                 await websocket.send_bytes(message)
             return True
+
+        async def perform_maai_behavior(decision: MaaiDecision) -> None:
+            """Perform a subtle two-step nod without entering the LLM turn."""
+            if not device_id:
+                return
+            request_id = secrets.token_hex(8)
+            pitch = decision.pitch_deg
+            if pitch is None:
+                # A backchannel prediction becomes a tiny embodied
+                # acknowledgement; spoken interjections would overlap the user.
+                pitch = 49.0
+            await send_text(
+                control(
+                    "motion.set",
+                    request_id=request_id,
+                    pitch_deg=pitch,
+                    duration_ms=decision.duration_ms,
+                ).encode()
+            )
+            await asyncio.sleep((decision.duration_ms + 120) / 1_000)
+            await send_text(
+                control(
+                    "motion.set",
+                    request_id=secrets.token_hex(8),
+                    pitch_deg=45.0,
+                    duration_ms=max(250, decision.duration_ms // 2),
+                ).encode()
+            )
 
         def feed_render_reference(pcm: bytes) -> None:
             # Keep the AEC render level synchronized with physical playback.
@@ -2912,12 +2948,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             )
                             continue
                         echo.feed_physical_render_16k(frame.pcm)
+                        maai_runtime.feed_render(frame.pcm)
                         continue
                     if frame.stream != AudioStream.MICROPHONE:
                         error = control("error", code="wrong_audio_stream")
                         await send_text(error.encode())
                         continue
                     clean_pcm = echo.process_capture_16k(frame.pcm)
+                    maai_runtime.feed_capture(clean_pcm)
+                    maai_result = maai_runtime.take_result()
+                    if maai_result is not None and device_id:
+                        loop_now = asyncio.get_running_loop().time()
+                        decision = maai_arbiter.decide(
+                            maai_result,
+                            language=preferred_language,
+                            user_speaking=turn_detector.active,
+                            robot_speaking=(
+                                device_playback_active
+                                or is_speaking()
+                                or bool(turn_task and not turn_task.done())
+                            ),
+                            conversation_suspended=conversation_suspended,
+                            motion_busy=bool(active_motion_request_ids),
+                            now=loop_now,
+                        )
+                        meta = maai_result.get("_meta", {})
+                        results_for(device_id).append(
+                            {
+                                "type": "telemetry",
+                                "component": "maai_inference",
+                                "inference_ms": meta.get("inference_ms"),
+                                "queue_lag_ms": meta.get("queue_lag_ms"),
+                                "decision": decision.behavior if decision else None,
+                                "shadow_mode": settings.maai_shadow_mode,
+                                "received_monotonic_ns": time.perf_counter_ns(),
+                            }
+                        )
+                        if decision is not None and not settings.maai_shadow_mode:
+                            task = asyncio.create_task(perform_maai_behavior(decision))
+                            maai_behavior_tasks.add(task)
+                            task.add_done_callback(maai_behavior_tasks.discard)
                     barge_pcm = echo.remove_aligned_render(frame.pcm)
                     microphone.extend(clean_pcm)
                     barge_microphone.extend(barge_pcm)
@@ -3727,6 +3797,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     sensor_task,
                     voice_barge_verification_task,
                     scheduled_worker_task,
+                    *maai_behavior_tasks,
                 )
                 if task is not None
             ]

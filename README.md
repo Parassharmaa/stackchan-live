@@ -14,6 +14,8 @@ The project provides:
   Archive, and Steer controls with matching body-light feedback;
 - laptop-local Whisper STT, Supertonic TTS, audio scheduling, SQLite memory,
   and opt-in proactive schedules;
+- optional MaAI attentive-listening predictions for sparse bilingual
+  backchannels and Japanese nods, isolated from the voice loop;
 - Vercel Eve intelligence with bilingual conversation, skills, and typed tools;
 - bounded multi-tool turns with firmware-result grounding and screen double-tap
   interruption;

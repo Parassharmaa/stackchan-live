@@ -108,6 +108,33 @@ Raw microphone audio, speech models, TTS, and SQLite memory stay on the Mac.
 Final transcripts, selected memory/context, and tool schemas are sent to the
 configured Eve model.
 
+### Optional attentive listening with MaAI
+
+MaAI can predict well-timed backchannels in English/Japanese and three kinds of
+Japanese nod. It runs in a separate Pixi environment and subprocess, consumes
+only the existing 16 kHz AEC-clean microphone and physical-render streams, and
+drops stale frames instead of delaying STT, TTS, or interruption handling.
+
+```sh
+pixi install -e maai
+```
+
+Then set `STACKCHAN_MAAI_ENABLED=true` in `server/.env` and restart. Keep
+`STACKCHAN_MAAI_SHADOW_MODE=true` while checking `optional.maai` in `/health`
+and `maai_inference` entries in the device results endpoint. After validating
+the room and microphone, set shadow mode to `false` to enable sparse two-step
+head acknowledgements. MaAI never creates an LLM turn or speaks over the user.
+
+Benchmark the isolated bridge with:
+
+```sh
+pixi run benchmark-maai
+```
+
+The MaAI code and the selected `vap_bc_jp`, `vap_bc_en`, and `vap_nod_jp`
+checkpoints are MIT-licensed upstream dependencies downloaded into ignored
+local caches; they are not redistributed by this repository.
+
 ## 6. Validate before normal use
 
 Run the deterministic suite first:
