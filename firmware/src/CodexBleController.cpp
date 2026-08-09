@@ -325,7 +325,10 @@ void CodexBleController::sendRpcResponse(const char* method, int id) {
     result["profile_index"] = 0;
     result["layer_index"] = 1;
     result["battery"] = M5.Power.getBatteryLevel();
-    result["is_charging"] = M5.Power.isCharging();
+    // M5Unified returns a charging-state enum here. Assign an actual bool:
+    // the Work Louder SDK rejects a numeric 0/1 and aborts device setup.
+    result["is_charging"] =
+        M5.Power.isCharging() == m5::Power_Class::is_charging;
   } else if (strcmp(method, "sys.version") == 0) {
     response["result"]["version"] = kFirmwareVersion;
   } else {

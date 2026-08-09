@@ -951,8 +951,12 @@ void handleTouch(uint32_t now_ms) {
       return;
     }
   }
-  if (detail.wasFlicked() && abs(detail.distanceX()) >= 70 &&
-      abs(detail.distanceX()) > abs(detail.distanceY()) * 2) {
+  const bool horizontal_gesture_finished =
+      detail.wasFlicked() || detail.wasDragged() || detail.wasReleased();
+  if (horizontal_gesture_finished && abs(detail.distanceX()) >= 40 &&
+      abs(detail.distanceX()) * 2 > abs(detail.distanceY()) * 3) {
+    Serial.printf("codex-ui: swipe dx=%d dy=%d mode=%d\n", detail.distanceX(),
+                  detail.distanceY(), face.codexMode());
     if (!face.codexMode() && detail.distanceX() < 0) {
       enterCodexMode();
       return;
@@ -1080,6 +1084,7 @@ void setup() {
   auto config = M5.config();
   config.output_power = true;
   M5.begin(config);
+  M5.Touch.setFlickThresh(24);
   boot_count = incrementPersistentBootCount();
   Serial.printf("boot: persistent_count=%u reset=%s heap=%u\n", boot_count,
                 resetReasonName(esp_reset_reason()), ESP.getFreeHeap());

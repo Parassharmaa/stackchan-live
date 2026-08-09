@@ -62,6 +62,13 @@ def test_firmware_locks_protocol_constants_and_crlf_termination() -> None:
     assert "0x85, 0x06" in source  # vendor report ID 6 in the HID descriptor
 
 
+def test_device_status_serializes_charging_state_as_json_boolean() -> None:
+    source = BLE_SOURCE.read_text()
+    assert 'result["is_charging"]' in source
+    assert "M5.Power.isCharging() == m5::Power_Class::is_charging" in source
+    assert 'result["is_charging"] = M5.Power.isCharging();' not in source
+
+
 def test_all_six_status_colors_have_semantic_ui_states() -> None:
     source = BLE_SOURCE.read_text()
     expected = {
@@ -86,7 +93,10 @@ def test_touch_ui_maps_agents_actions_and_contextual_approval() -> None:
     assert "codex.setMicPressed(false)" in main
     assert "codex.selectAgent" in main
     assert "constrain(x / 50, 0, 5)" in main
-    assert "detail.wasFlicked()" in main
+    assert "detail.wasFlicked() || detail.wasDragged() || detail.wasReleased()" in main
+    assert "abs(detail.distanceX()) >= 40" in main
+    assert "M5.Touch.setFlickThresh(24)" in main
+    assert 'Serial.printf("codex-ui: swipe' in main
     assert "detail.distanceX() < 0" in main
     assert "detail.distanceX() > 0" in main
     assert "last_codex_motion_state" in main
