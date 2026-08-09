@@ -131,14 +131,19 @@ def test_agent_touch_emits_double_activation_and_uses_duplex_safe_sounds() -> No
     assert "if (playback_active_ || playback_count_ != 0" in audio
     assert "M5.Speaker.tone" not in audio
     assert "audio.uiSoundActive()" in main
-    assert "memset(frame, 0, kOutputSamplesPerFrame * sizeof(int16_t))" in audio
-    assert "playback_lengths_[playback_tail_] = kOutputSamplesPerFrame" in audio
+    assert "zeroPadUiSoundFrame(" in audio
+    assert "uiSoundPcmFrameLength(" in audio
 
 
 def test_codex_controls_are_not_swallowed_by_voice_playback_guard() -> None:
     main = MAIN_SOURCE.read_text()
-    codex_branch = main.index("if (face.codexMode()) {", main.index("void handleTouch"))
-    playback_guard = main.index("if (audio.playbackActive())", codex_branch)
+    codex_branch = main.index(
+        "tap_route == stackchan::ScreenTapRoute::codex_control",
+        main.index("void handleTouch"),
+    )
+    playback_guard = main.index(
+        "tap_route == stackchan::ScreenTapRoute::interrupt_playback", codex_branch
+    )
     select_agent = main.index("codex.selectAgent", codex_branch)
     assert codex_branch < select_agent < playback_guard
     assert "Codex controls above are exempt from this guard" in main

@@ -1,5 +1,7 @@
 #include "AudioEndpoint.hpp"
 
+#include "InteractionPolicy.hpp"
+
 namespace stackchan {
 
 namespace {
@@ -288,7 +290,6 @@ bool AudioEndpoint::playUiSound(UiSoundEffect effect, uint8_t variant) {
       // for each note makes the DMA ring run dry between loop iterations and
       // turns a clean cue into clicks/dropouts. Always enqueue a complete
       // packet and zero-pad the note tail.
-      memset(frame, 0, kOutputSamplesPerFrame * sizeof(int16_t));
       for (size_t index = 0; index < generated_samples; ++index) {
         const size_t position = offset + index;
         const size_t remaining = total_samples - position - 1;
@@ -302,7 +303,9 @@ bool AudioEndpoint::playUiSound(UiSoundEffect effect, uint8_t variant) {
         frame[index] = static_cast<int16_t>(
             sinf(phase) * kPeakSample * tone.amplitude * min(attack, release));
       }
-      playback_lengths_[playback_tail_] = kOutputSamplesPerFrame;
+      zeroPadUiSoundFrame(frame, generated_samples, kOutputSamplesPerFrame);
+      playback_lengths_[playback_tail_] = uiSoundPcmFrameLength(
+          generated_samples, kOutputSamplesPerFrame);
       playback_tail_ = (playback_tail_ + 1) % kPlaybackQueueDepth;
       ++playback_count_;
     }

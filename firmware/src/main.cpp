@@ -17,6 +17,7 @@
 #include "DeviceProtocol.hpp"
 #include "FaceRenderer.hpp"
 #include "HeadTouchSensor.hpp"
+#include "InteractionPolicy.hpp"
 #include "LightController.hpp"
 #include "MotionController.hpp"
 
@@ -968,9 +969,11 @@ void handleTouch(uint32_t now_ms) {
     }
   }
   if (!detail.wasClicked()) return;
+  const auto tap_route = stackchan::routeScreenTap(
+      face.codexMode(), audio.playbackActive(), detail.getClickCount());
   const int x = detail.x;
   const int y = detail.y;
-  if (face.codexMode()) {
+  if (tap_route == stackchan::ScreenTapRoute::codex_control) {
     // Codex is a dedicated control surface. Voice playback and a preceding UI
     // cue must never reinterpret its buttons as conversation interruption.
     // This also lets the user switch away from a speaking/working session.
@@ -1024,11 +1027,11 @@ void handleTouch(uint32_t now_ms) {
     return;
   }
 
-  if (audio.playbackActive()) {
+  if (tap_route == stackchan::ScreenTapRoute::none) return;
+  if (tap_route == stackchan::ScreenTapRoute::interrupt_playback) {
     // A single tap during ordinary face playback is intentionally inert. The
     // second tap in M5Unified's bounded click window is the explicit physical
     // interruption. Codex controls above are exempt from this guard.
-    if (detail.getClickCount() < 2) return;
     flushAudioWithSensorGuard();
     reportPlaybackState(false);
     sendBargeIn("screen_double_tap");
