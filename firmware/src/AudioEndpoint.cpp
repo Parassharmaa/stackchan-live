@@ -281,10 +281,15 @@ bool AudioEndpoint::playUiSound(UiSoundEffect effect, uint8_t variant) {
     for (size_t offset = 0; offset < total_samples;
          offset += kOutputSamplesPerFrame) {
       if (playback_count_ >= kPlaybackQueueDepth) return false;
-      const size_t frame_samples =
+      const size_t generated_samples =
           min(kOutputSamplesPerFrame, total_samples - offset);
       int16_t* frame = playback_queue_[playback_tail_];
-      for (size_t index = 0; index < frame_samples; ++index) {
+      // The I2S DMA clock consumes fixed 20 ms packets. Sending a 5-18 ms tail
+      // for each note makes the DMA ring run dry between loop iterations and
+      // turns a clean cue into clicks/dropouts. Always enqueue a complete
+      // packet and zero-pad the note tail.
+      memset(frame, 0, kOutputSamplesPerFrame * sizeof(int16_t));
+      for (size_t index = 0; index < generated_samples; ++index) {
         const size_t position = offset + index;
         const size_t remaining = total_samples - position - 1;
         const float attack = min(1.0f, static_cast<float>(position + 1) /
@@ -297,7 +302,7 @@ bool AudioEndpoint::playUiSound(UiSoundEffect effect, uint8_t variant) {
         frame[index] = static_cast<int16_t>(
             sinf(phase) * kPeakSample * tone.amplitude * min(attack, release));
       }
-      playback_lengths_[playback_tail_] = frame_samples;
+      playback_lengths_[playback_tail_] = kOutputSamplesPerFrame;
       playback_tail_ = (playback_tail_ + 1) % kPlaybackQueueDepth;
       ++playback_count_;
     }

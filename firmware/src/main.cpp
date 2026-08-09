@@ -968,21 +968,12 @@ void handleTouch(uint32_t now_ms) {
     }
   }
   if (!detail.wasClicked()) return;
-  if (audio.playbackActive()) {
-    // A single tap during playback is intentionally inert. The second tap in
-    // M5Unified's bounded click window is the explicit physical interruption.
-    if (detail.getClickCount() < 2) return;
-    flushAudioWithSensorGuard();
-    reportPlaybackState(false);
-    sendBargeIn("screen_double_tap");
-    face.setState(stackchan::FaceState::listening);
-    face.setStatus("Listening");
-    return;
-  }
-
   const int x = detail.x;
   const int y = detail.y;
   if (face.codexMode()) {
+    // Codex is a dedicated control surface. Voice playback and a preceding UI
+    // cue must never reinterpret its buttons as conversation interruption.
+    // This also lets the user switch away from a speaking/working session.
     if (x < 52 && y < 48) {
       exitCodexMode();
       return;
@@ -1030,6 +1021,19 @@ void handleTouch(uint32_t now_ms) {
       }
       return;
     }
+    return;
+  }
+
+  if (audio.playbackActive()) {
+    // A single tap during ordinary face playback is intentionally inert. The
+    // second tap in M5Unified's bounded click window is the explicit physical
+    // interruption. Codex controls above are exempt from this guard.
+    if (detail.getClickCount() < 2) return;
+    flushAudioWithSensorGuard();
+    reportPlaybackState(false);
+    sendBargeIn("screen_double_tap");
+    face.setState(stackchan::FaceState::listening);
+    face.setStatus("Listening");
     return;
   }
 
