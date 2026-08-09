@@ -240,7 +240,9 @@ def test_codex_audio_session_is_isolated_and_resumes_on_exit() -> None:
     assert 'sendControl("conversation.suspend");' in main[enter:exit_mode]
     assert "audio.setConversationPaused(false);" in main[exit_mode:touch]
     assert 'sendControl("conversation.resume");' in main[exit_mode:touch]
-    assert 'if (face.codexMode()) sendControl("conversation.suspend");' in main
+    reconnect = main.index("if (face.codexMode()) {", main.index('type == "hello.ack"'))
+    assert 'sendControl("conversation.suspend");' in main[reconnect : reconnect + 180]
+    assert "sendCodexFocused(codex.selectedAgent());" in main[reconnect : reconnect + 180]
     assert "if (conversation_paused_) return;" in audio
     assert "if (conversation_paused_ || !connected_" in audio
     assert "if (audio.conversationPaused()) break;" in main
@@ -282,13 +284,19 @@ def test_new_chat_uses_native_shortcut_and_queued_steer_uses_micro_action() -> N
     assert "face.setCodexQueuedFollowup(codex_queued_followup)" in main
 
 
-def test_codex_titles_are_sent_by_runtime_and_rendered_on_device() -> None:
+def test_codex_titles_are_bound_only_after_the_physical_slot_is_focused() -> None:
     app = APP_SOURCE.read_text()
     main = MAIN_SOURCE.read_text()
     face = FACE_SOURCE.read_text()
     assert "recent_codex_titles" in app
-    assert 'control("codex.sessions", titles=titles)' in app
-    assert 'type == "codex.sessions"' in main
+    assert 'command.type == "codex.focused"' in app
+    assert '"codex.session", index=index, title=titles[0]' in app
+    assert 'type == "codex.session"' in main
+    assert 'document["type"] = "codex.focused"' in main
+    assert 'document["payload"]["index"] = index' in main
+    assert "sendCodexFocused(static_cast<uint8_t>(agent))" in main
+    assert "sendCodexFocused(codex.selectedAgent())" in main
+    assert 'control("codex.sessions", titles=titles)' not in app
     assert "face.setCodexAgentTitle" in main
     assert "codex_agent_titles_[codex_selected_agent_]" in face
     assert 'String("ACTIVE AGENT  ")' not in face

@@ -195,6 +195,16 @@ void sendControl(const char* type) {
   socket_client.sendTXT(output);
 }
 
+void sendCodexFocused(uint8_t index) {
+  if (!server_connected || index >= stackchan::CodexBleController::kAgentCount) return;
+  JsonDocument document;
+  document["type"] = "codex.focused";
+  document["payload"]["index"] = index;
+  String output;
+  serializeJson(document, output);
+  socket_client.sendTXT(output);
+}
+
 void sendBargeIn(const char* reason) {
   JsonDocument document;
   document["type"] = "barge_in";
@@ -670,7 +680,10 @@ void handleControl(const uint8_t* payload, size_t length) {
     // A reboot or Wi-Fi reconnect can finish while the Codex surface is still
     // open. Reassert exclusive ownership after authentication so the laptop
     // runtime cannot silently resume underneath it.
-    if (face.codexMode()) sendControl("conversation.suspend");
+    if (face.codexMode()) {
+      sendControl("conversation.suspend");
+      sendCodexFocused(codex.selectedAgent());
+    }
   } else if (!server_connected) {
     // No physical control or audio state is accepted before the server proves
     // knowledge of the pairing secret for this connection's two fresh nonces.
@@ -701,12 +714,12 @@ void handleControl(const uint8_t* payload, size_t length) {
       lights.set(255, 105, 145, 0.08f, stackchan::LightAnimation::solid);
       if (!audio.playbackActive()) applyHeldFace();
     }
-  } else if (type == "codex.sessions") {
-    const JsonArrayConst titles = body["titles"].as<JsonArrayConst>();
-    uint8_t index = 0;
-    for (JsonVariantConst value : titles) {
-      if (index >= stackchan::CodexBleController::kAgentCount) break;
-      face.setCodexAgentTitle(index++, value.as<String>());
+  } else if (type == "codex.session") {
+    const int index = body["index"] | -1;
+    const String title = body["title"] | "";
+    if (index >= 0 && index < stackchan::CodexBleController::kAgentCount &&
+        !title.isEmpty()) {
+      face.setCodexAgentTitle(static_cast<uint8_t>(index), title);
     }
   } else if (type == "approval.requested") {
     const float timeout_seconds = constrain(
@@ -961,9 +974,14 @@ void enterCodexMode() {
   face.setCodexArchiveArmed(false);
   face.setCodexQueuedFollowup(false);
   face.setCodexStatusOpen(false);
+  for (uint8_t index = 0; index < stackchan::CodexBleController::kAgentCount;
+       ++index) {
+    face.setCodexAgentTitle(index, "");
+  }
   codex_queued_followup = false;
   codex_archive_armed_until_ms = 0;
   syncCodexUi(true);
+  sendCodexFocused(codex.selectedAgent());
   // Entering the mode is visual only. Do not turn a navigation gesture into
   // unsolicited servo motion.
   last_codex_motion_state = codex.agent(codex.selectedAgent()).state();
@@ -1067,6 +1085,7 @@ void handleTouch(uint32_t now_ms) {
                             : stackchan::UiSoundEffect::error,
                         static_cast<uint8_t>(agent));
       codex.selectAgent(static_cast<uint8_t>(agent));
+      sendCodexFocused(static_cast<uint8_t>(agent));
       // Agent navigation updates the screen/lights but never moves the head.
       last_codex_motion_state = codex.agent(agent).state();
       return;
