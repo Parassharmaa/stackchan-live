@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BLE_SOURCE = ROOT / "firmware/src/CodexBleController.cpp"
 MAIN_SOURCE = ROOT / "firmware/src/main.cpp"
 FACE_SOURCE = ROOT / "firmware/src/FaceRenderer.cpp"
+AUDIO_SOURCE = ROOT / "firmware/src/AudioEndpoint.cpp"
 
 REPORT_LENGTH = 63
 CHUNK_LENGTH = 61
@@ -88,7 +89,7 @@ def test_touch_ui_maps_agents_actions_and_contextual_approval() -> None:
     face = FACE_SOURCE.read_text()
     for action in (0, 3, 4):
         assert f"codex.sendAction({action})" in main
-    assert "codex.sendAction(x < 160 ? 2 : 1)" in main
+    assert "codex.sendAction(decline ? 2 : 1)" in main
     assert "codex.setMicPressed(true)" in main
     assert "codex.setMicPressed(false)" in main
     assert "codex.selectAgent" in main
@@ -106,6 +107,30 @@ def test_touch_ui_maps_agents_actions_and_contextual_approval() -> None:
     assert '"DECLINE"' in face
     assert '"APPROVE"' in face
     assert '"FAST"' in face and '"PLAN"' in face and '"HOLD MIC"' in face
+
+
+def test_agent_touch_emits_double_activation_and_uses_duplex_safe_sounds() -> None:
+    ble = BLE_SOURCE.read_text()
+    main = MAIN_SOURCE.read_text()
+    audio = AUDIO_SOURCE.read_text()
+    assert "kAgentFocusTapGapMs = 55" in ble
+    assert "const bool first = sendTap(key);" in ble
+    assert "const bool second = sendTap(key);" in ble
+    assert "face.setCodexSelectedAgent" in main
+    for effect in (
+        "agent_select",
+        "fast",
+        "plan",
+        "assistant",
+        "approve",
+        "decline",
+    ):
+        assert f"UiSoundEffect::{effect}" in main
+    assert "bool AudioEndpoint::playUiSound" in audio
+    assert "playback_queue_" in audio
+    assert "if (playback_active_ || playback_count_ != 0" in audio
+    assert "M5.Speaker.tone" not in audio
+    assert "audio.uiSoundActive()" in main
 
 
 def test_codex_mode_does_not_replace_wifi_voice_transport() -> None:

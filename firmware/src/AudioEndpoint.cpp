@@ -171,6 +171,7 @@ bool AudioEndpoint::update() {
     if (playback_active_ && playback_count_ == 0 &&
         millis() - last_playback_write_ms_ >= 80) {
       playback_active_ = false;
+      ui_sound_active_ = false;
       setMicrophoneCodecGain(false);
       playback_response_open_ = false;
       playback_energy_ = 0.0f;
@@ -196,12 +197,136 @@ bool AudioEndpoint::update() {
   if (!playback_frame_started_ && playback_count_ == 0) {
     M5.Speaker.end();
     playback_active_ = false;
+    ui_sound_active_ = false;
     microphone_active_ = M5.Mic.begin();
     Serial.printf("audio: playback drained, microphone=%s\n",
                   microphone_active_ ? "ready" : "failed");
     return true;
   }
   return false;
+}
+
+bool AudioEndpoint::playUiSound(UiSoundEffect effect, uint8_t variant) {
+  // Never mix interface sounds into speech. Besides sounding cluttered, that
+  // would create a misleading render reference for acoustic echo cancellation.
+  if (playback_active_ || playback_count_ != 0 || playback_response_open_) {
+    return false;
+  }
+
+  struct Tone {
+    float frequency;
+    uint16_t duration_ms;
+    float amplitude;
+  };
+  Tone tones[3]{};
+  size_t tone_count = 0;
+  switch (effect) {
+    case UiSoundEffect::agent_select:
+      tones[0] = {680.0f + 55.0f * (variant % 6), 45, 0.58f};
+      tone_count = 1;
+      break;
+    case UiSoundEffect::fast:
+      tones[0] = {880.0f, 28, 0.48f};
+      tones[1] = {1175.0f, 38, 0.62f};
+      tone_count = 2;
+      break;
+    case UiSoundEffect::plan:
+      tones[0] = {587.0f, 42, 0.48f};
+      tones[1] = {784.0f, 58, 0.56f};
+      tone_count = 2;
+      break;
+    case UiSoundEffect::assistant:
+      tones[0] = {784.0f, 30, 0.50f};
+      tones[1] = {1047.0f, 34, 0.60f};
+      tones[2] = {1319.0f, 45, 0.52f};
+      tone_count = 3;
+      break;
+    case UiSoundEffect::approve:
+      tones[0] = {880.0f, 34, 0.54f};
+      tones[1] = {1175.0f, 62, 0.64f};
+      tone_count = 2;
+      break;
+    case UiSoundEffect::decline:
+      tones[0] = {494.0f, 38, 0.48f};
+      tones[1] = {330.0f, 70, 0.58f};
+      tone_count = 2;
+      break;
+    case UiSoundEffect::mic_release:
+      tones[0] = {740.0f, 30, 0.40f};
+      tones[1] = {554.0f, 45, 0.42f};
+      tone_count = 2;
+      break;
+    case UiSoundEffect::error:
+      tones[0] = {220.0f, 42, 0.52f};
+      tones[1] = {185.0f, 78, 0.58f};
+      tone_count = 2;
+      break;
+  }
+
+  playback_head_ = 0;
+  playback_tail_ = 0;
+  playback_count_ = 0;
+  playback_gain_ = 1.0f;
+  playback_ducked_ = false;
+  playback_end_received_ = true;
+  playback_response_open_ = false;
+  playback_starvation_latched_ = false;
+
+  constexpr float kPeakSample = 6200.0f;
+  constexpr size_t kEnvelopeSamples = kOutputRate * 3 / 1000;
+  for (size_t note_index = 0; note_index < tone_count; ++note_index) {
+    const Tone& tone = tones[note_index];
+    const size_t total_samples =
+        max(size_t{1}, static_cast<size_t>(tone.duration_ms) * kOutputRate / 1000);
+    for (size_t offset = 0; offset < total_samples;
+         offset += kOutputSamplesPerFrame) {
+      if (playback_count_ >= kPlaybackQueueDepth) return false;
+      const size_t frame_samples =
+          min(kOutputSamplesPerFrame, total_samples - offset);
+      int16_t* frame = playback_queue_[playback_tail_];
+      for (size_t index = 0; index < frame_samples; ++index) {
+        const size_t position = offset + index;
+        const size_t remaining = total_samples - position - 1;
+        const float attack = min(1.0f, static_cast<float>(position + 1) /
+                                           static_cast<float>(kEnvelopeSamples));
+        const float release = min(1.0f, static_cast<float>(remaining + 1) /
+                                            static_cast<float>(kEnvelopeSamples));
+        const float phase = 2.0f * PI * tone.frequency *
+                            static_cast<float>(position) /
+                            static_cast<float>(kOutputRate);
+        frame[index] = static_cast<int16_t>(
+            sinf(phase) * kPeakSample * tone.amplitude * min(attack, release));
+      }
+      playback_lengths_[playback_tail_] = frame_samples;
+      playback_tail_ = (playback_tail_ + 1) % kPlaybackQueueDepth;
+      ++playback_count_;
+    }
+  }
+  if (playback_count_ == 0) return false;
+
+  playback_energy_ = 0.35f;
+  if (duplex_ready_) {
+    if (!setMicrophoneCodecGain(true)) {
+      playback_count_ = 0;
+      return false;
+    }
+  } else {
+    if (microphone_active_) {
+      M5.Mic.end();
+      microphone_active_ = false;
+    }
+    if (!M5.Speaker.begin()) {
+      playback_count_ = 0;
+      microphone_active_ = M5.Mic.begin();
+      return false;
+    }
+  }
+  ui_sound_active_ = true;
+  playback_active_ = true;
+  Serial.printf("audio: ui sound=%u variant=%u frames=%u\n",
+                static_cast<unsigned>(effect), variant,
+                static_cast<unsigned>(playback_count_));
+  return true;
 }
 
 void AudioEndpoint::captureFrame() {
@@ -410,6 +535,7 @@ bool AudioEndpoint::flush() {
     playback_frame_started_ = false;
     playback_energy_ = 0.0f;
     playback_active_ = false;
+    ui_sound_active_ = false;
     playback_response_open_ = false;
     playback_end_received_ = false;
     playback_starvation_latched_ = false;
@@ -429,6 +555,7 @@ bool AudioEndpoint::flush() {
   playback_starvation_latched_ = false;
   playback_energy_ = 0.0f;
   playback_active_ = false;
+  ui_sound_active_ = false;
   if (!microphone_active_) microphone_active_ = M5.Mic.begin();
   return true;
 }

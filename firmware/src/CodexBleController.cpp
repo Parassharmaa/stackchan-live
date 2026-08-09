@@ -24,6 +24,10 @@ constexpr uint16_t kProductId = 0x8360;
 constexpr uint16_t kProductVersion = 0x0001;
 constexpr uint8_t kChannelJsonRpc = 2;
 constexpr size_t kRpcBufferLength = 2048;
+// ChatGPT opens an Agent Key conversation after two presses within 350 ms
+// unless its optional single-tap preference is enabled. One physical tap on
+// Stack-chan should be sufficient, so emit the compatible pair promptly.
+constexpr uint16_t kAgentFocusTapGapMs = 55;
 
 // HID descriptors are wire-format declarations. This descriptor exposes the
 // standard keyboard, consumer, pointer, and vendor report collections expected
@@ -189,17 +193,23 @@ const CodexAgentStatus& CodexBleController::agent(uint8_t index) const {
 void CodexBleController::selectAgent(uint8_t index) {
   if (index >= kAgentCount) return;
   selected_agent_ = index;
+  ui_dirty_ = true;
   char key[5];
   snprintf(key, sizeof(key), "AG%02u", index);
-  sendKey(key, true);
-  delay(10);
-  sendKey(key, false);
-  ui_dirty_ = true;
+  const bool first = sendTap(key);
+  delay(kAgentFocusTapGapMs);
+  const bool second = sendTap(key);
+  Serial.printf("codex-ble: agent-focus index=%u first=%d second=%d\n", index,
+                first, second);
 }
 
 bool CodexBleController::sendAction(uint8_t index) {
   char key[6];
   snprintf(key, sizeof(key), "ACT%02u", index);
+  return sendTap(key);
+}
+
+bool CodexBleController::sendTap(const char* key) {
   const bool down = sendKey(key, true);
   delay(10);
   return sendKey(key, false) && down;

@@ -52,6 +52,7 @@ class CodexBleController {
   void onVendorWrite(const uint8_t* data, size_t length);
 
  private:
+  bool sendTap(const char* key);
   bool sendKey(const char* key, bool pressed);
   bool sendFramedJson(const String& json, bool append_crlf);
   void processRpc(const char* json);

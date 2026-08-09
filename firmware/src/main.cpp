@@ -948,6 +948,7 @@ void handleTouch(uint32_t now_ms) {
     if (codex_mic_pressed && detail.wasReleased()) {
       codex.setMicPressed(false);
       codex_mic_pressed = false;
+      audio.playUiSound(stackchan::UiSoundEffect::mic_release);
       return;
     }
   }
@@ -988,6 +989,13 @@ void handleTouch(uint32_t now_ms) {
     }
     if (y >= 42 && y <= 94) {
       const int agent = constrain(x / 50, 0, 5);
+      // Paint selection immediately; host activation emits its compatible
+      // double press afterward and must not delay physical feedback.
+      face.setCodexSelectedAgent(static_cast<uint8_t>(agent));
+      audio.playUiSound(codex.connected()
+                            ? stackchan::UiSoundEffect::agent_select
+                            : stackchan::UiSoundEffect::error,
+                        static_cast<uint8_t>(agent));
       codex.selectAgent(static_cast<uint8_t>(agent));
       // Agent navigation updates the screen/lights but never moves the head.
       last_codex_motion_state = codex.agent(agent).state();
@@ -996,12 +1004,28 @@ void handleTouch(uint32_t now_ms) {
     if (y >= 176) {
       const auto state = codex.agent(codex.selectedAgent()).state();
       if (state == stackchan::CodexAgentState::needs_input) {
-        codex.sendAction(x < 160 ? 2 : 1);  // NG / OK
+        const bool decline = x < 160;
+        const bool sent = codex.sendAction(decline ? 2 : 1);  // NG / OK
+        audio.playUiSound(sent ? (decline ? stackchan::UiSoundEffect::decline
+                                         : stackchan::UiSoundEffect::approve)
+                               : stackchan::UiSoundEffect::error);
       } else {
         const int command = constrain(x / 80, 0, 3);
-        if (command == 0) codex.sendAction(0);       // Fast
-        if (command == 1) codex.sendAction(3);       // Plan
-        if (command == 2) codex.sendAction(4);       // AI / new task
+        bool sent = false;
+        auto effect = stackchan::UiSoundEffect::error;
+        if (command == 0) {
+          sent = codex.sendAction(0);  // Fast
+          effect = stackchan::UiSoundEffect::fast;
+        }
+        if (command == 1) {
+          sent = codex.sendAction(3);  // Plan
+          effect = stackchan::UiSoundEffect::plan;
+        }
+        if (command == 2) {
+          sent = codex.sendAction(4);  // AI / new task
+          effect = stackchan::UiSoundEffect::assistant;
+        }
+        audio.playUiSound(sent ? effect : stackchan::UiSoundEffect::error);
         // The microphone is handled as a true press/release above.
       }
       return;
@@ -1232,7 +1256,8 @@ void loop() {
       face.setStatus("Idle");
     }
   }
-  if (audio.update()) {
+  const bool ui_sound_was_active = audio.uiSoundActive();
+  if (audio.update() && !ui_sound_was_active) {
     last_playback_ended_ms = now_ms;
     reportPlaybackState(false);
     face.setState(stackchan::FaceState::idle);

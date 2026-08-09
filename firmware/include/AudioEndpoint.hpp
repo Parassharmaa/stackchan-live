@@ -8,12 +8,24 @@
 
 namespace stackchan {
 
+enum class UiSoundEffect : uint8_t {
+  agent_select,
+  fast,
+  plan,
+  assistant,
+  approve,
+  decline,
+  mic_release,
+  error,
+};
+
 class AudioEndpoint {
  public:
   explicit AudioEndpoint(WebSocketsClient& socket) : socket_(socket) {}
   bool begin();
   void setConnected(bool connected) { connected_ = connected; }
   bool playbackActive() const { return playback_active_; }
+  bool uiSoundActive() const { return ui_sound_active_; }
   void setDucked(bool ducked, float gain = 0.05f);
   float playbackDuckGain() const { return playback_duck_gain_; }
   void setPlaybackStartFrames(size_t frames) {
@@ -42,6 +54,7 @@ class AudioEndpoint {
   bool update();
   void captureFrame();
   void playFrame(const uint8_t* payload, size_t length);
+  bool playUiSound(UiSoundEffect effect, uint8_t variant = 0);
   bool flush();
 
  private:
@@ -90,6 +103,7 @@ class AudioEndpoint {
   uint32_t render_reference_sequence_ = 0;
   bool connected_ = false;
   bool playback_active_ = false;
+  bool ui_sound_active_ = false;
   bool playback_ducked_ = false;
   float playback_duck_gain_ = 0.05f;
   float playback_gain_ = 1.0f;
