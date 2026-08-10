@@ -111,10 +111,13 @@ void FaceRenderer::setCodexSelectedAgent(uint8_t index) {
 }
 
 void FaceRenderer::setCodexAgentState(uint8_t index, CodexAgentState state,
-                                      uint32_t color) {
+                                      uint32_t color, uint8_t effect,
+                                      float speed) {
   if (index >= codex_agent_states_.size()) return;
   codex_agent_states_[index] = state;
   codex_agent_colors_[index] = color;
+  codex_agent_effects_[index] = effect;
+  codex_agent_speeds_[index] = speed;
 }
 
 void FaceRenderer::update(uint32_t now_ms) {
@@ -247,19 +250,15 @@ void FaceRenderer::drawFaceHud(uint32_t now_ms) {
     strftime(clock_text, sizeof(clock_text), "%H:%M", &local_time);
   }
 
-  display_.fillRoundRect(221, 5, 94, 19, 8, panel);
+  display_.fillRoundRect(241, 5, 74, 19, 8, panel);
   display_.setTextDatum(textdatum_t::middle_left);
   display_.setTextSize(1);
   display_.setTextColor(ink);
-  display_.drawString(clock_text, 227, 14);
-  display_.drawRoundRect(267, 9, 19, 10, 3, ink);
-  display_.fillRect(286, 12, 2, 4, ink);
+  display_.drawString(clock_text, 247, 14);
+  display_.drawRoundRect(289, 9, 19, 10, 3, ink);
+  display_.fillRect(308, 12, 2, 4, ink);
   const int fill_width = battery_level_ * 15 / 100;
-  if (fill_width > 0) display_.fillRect(269, 11, fill_width, 6, battery_ink);
-  char battery_text[5];
-  snprintf(battery_text, sizeof(battery_text), "%d%%", battery_level_);
-  display_.setTextDatum(textdatum_t::middle_right);
-  display_.drawString(battery_text, 311, 14);
+  if (fill_width > 0) display_.fillRect(291, 11, fill_width, 6, battery_ink);
 }
 
 void FaceRenderer::drawCodex(uint32_t now_ms) {
@@ -293,11 +292,19 @@ void FaceRenderer::drawCodex(uint32_t now_ms) {
   for (uint8_t index = 0; index < 6; ++index) {
     const uint32_t color = stateColor(index);
     const bool selected = index == codex_selected_agent_;
-    const bool pulse = codex_agent_states_[index] == CodexAgentState::working ||
-                       codex_agent_states_[index] == CodexAgentState::needs_input;
+    const bool pulse =
+        codex_indicator_animation_ && codex_agent_effects_[index] != 0 &&
+        (codex_agent_states_[index] == CodexAgentState::working ||
+         codex_agent_states_[index] == CodexAgentState::needs_input);
     const int radius = selected ? 22 : 19;
     if (pulse) {
-      const int halo = 23 + static_cast<int>((now_ms / 180) % 3);
+      const float host_speed = codex_agent_speeds_[index];
+      const uint32_t period_ms =
+          host_speed > 0.05f
+              ? constrain(static_cast<uint32_t>(1000.0f / host_speed), 240U, 2000U)
+              : codex_indicator_period_ms_;
+      const uint8_t phase = static_cast<uint8_t>((now_ms % period_ms) * 4 / period_ms);
+      const int halo = 23 + (phase <= 2 ? phase : 4 - phase);
       canvas_.drawCircle(agent_x[index], 28, halo, color565(color));
     }
     canvas_.fillCircle(agent_x[index], 28, radius, color565(color));

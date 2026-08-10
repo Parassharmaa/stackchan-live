@@ -31,7 +31,12 @@ class FaceRenderer {
   void setCodexMode(bool enabled);
   bool codexMode() const { return codex_mode_; }
   void setCodexSelectedAgent(uint8_t index);
-  void setCodexAgentState(uint8_t index, CodexAgentState state, uint32_t color);
+  void setCodexAgentState(uint8_t index, CodexAgentState state, uint32_t color,
+                          uint8_t effect, float speed);
+  void setCodexIndicatorAnimation(bool enabled, uint16_t fallback_period_ms) {
+    codex_indicator_animation_ = enabled;
+    codex_indicator_period_ms_ = fallback_period_ms < 240 ? 240 : fallback_period_ms;
+  }
   void setCodexVoiceState(CodexVoiceState state) { codex_voice_state_ = state; }
   void setCodexArchiveArmed(bool armed) { codex_archive_armed_ = armed; }
   void setCodexQueuedFollowup(bool queued) { codex_queued_followup_ = queued; }
@@ -76,6 +81,10 @@ class FaceRenderer {
   uint8_t codex_selected_agent_ = 0;
   std::array<CodexAgentState, 6> codex_agent_states_{};
   std::array<uint32_t, 6> codex_agent_colors_{};
+  std::array<uint8_t, 6> codex_agent_effects_{};
+  std::array<float, 6> codex_agent_speeds_{};
+  bool codex_indicator_animation_ = false;
+  uint16_t codex_indicator_period_ms_ = 720;
   CodexVoiceState codex_voice_state_ = CodexVoiceState::idle;
   bool codex_archive_armed_ = false;
   bool codex_queued_followup_ = false;

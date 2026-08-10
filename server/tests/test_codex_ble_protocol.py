@@ -165,11 +165,25 @@ def test_avatar_hud_shows_ntp_time_and_live_battery_level() -> None:
     assert "drawFaceHud(now_ms);" in face
     assert "M5.Power.getBatteryLevel()" in face
     assert "now_ms - last_battery_read_ms_ >= 30000" in face
-    assert 'snprintf(battery_text, sizeof(battery_text), "%d%%", battery_level_)' in face
-    assert "textdatum_t::middle_right" in face
+    assert "battery_text" not in face
+    assert 'drawString("%"' not in face
+    assert "const int fill_width = battery_level_ * 15 / 100" in face
     assert 'strftime(clock_text, sizeof(clock_text), "%H:%M"' in face
     assert 'configTzTime(STACKCHAN_TIMEZONE, "pool.ntp.org", "time.nist.gov")' in main
     assert '#define STACKCHAN_TIMEZONE "JST-9"' in local_config
+
+
+def test_codex_indicator_animation_is_static_by_default_and_host_controlled() -> None:
+    main = MAIN_SOURCE.read_text()
+    face = FACE_SOURCE.read_text()
+    header = FACE_HEADER.read_text()
+    local_config = (ROOT / "firmware/include/LocalConfig.example.hpp").read_text()
+    assert "STACKCHAN_CODEX_INDICATOR_ANIMATION 0" in local_config
+    assert "setCodexIndicatorAnimation" in header
+    assert "codex_indicator_animation_ && codex_agent_effects_[index] != 0" in face
+    assert "codex_agent_speeds_[index]" in face
+    assert "agent.effect" in main
+    assert "agent.speed" in main
 
 
 def test_agent_touch_emits_double_activation_and_uses_duplex_safe_sounds() -> None:

@@ -44,6 +44,12 @@
 #ifndef STACKCHAN_TIMEZONE
 #define STACKCHAN_TIMEZONE "JST-9"
 #endif
+#ifndef STACKCHAN_CODEX_INDICATOR_ANIMATION
+#define STACKCHAN_CODEX_INDICATOR_ANIMATION 0
+#endif
+#ifndef STACKCHAN_CODEX_INDICATOR_PULSE_MS
+#define STACKCHAN_CODEX_INDICATOR_PULSE_MS 720
+#endif
 
 namespace {
 
@@ -1154,7 +1160,8 @@ void syncCodexUi(bool force) {
   for (uint8_t index = 0; index < stackchan::CodexBleController::kAgentCount;
        ++index) {
     const auto& agent = codex.agent(index);
-    face.setCodexAgentState(index, agent.state(), agent.color);
+    face.setCodexAgentState(index, agent.state(), agent.color, agent.effect,
+                            agent.speed);
   }
   if (!face.codexMode()) return;
   const auto selected_state = codex.agent(codex.selectedAgent()).state();
@@ -1267,6 +1274,8 @@ void setup() {
                 resetReasonName(esp_reset_reason()), ESP.getFreeHeap());
   M5.Display.setBrightness(128);
   face.begin();
+  face.setCodexIndicatorAnimation(STACKCHAN_CODEX_INDICATOR_ANIMATION != 0,
+                                  STACKCHAN_CODEX_INDICATOR_PULSE_MS);
   face.setState(stackchan::FaceState::booting);
   face.setStatus("Custom Stack-chan");
   codex.begin();
