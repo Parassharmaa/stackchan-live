@@ -195,16 +195,6 @@ void sendControl(const char* type) {
   socket_client.sendTXT(output);
 }
 
-void sendCodexFocused(uint8_t index) {
-  if (!server_connected || index >= stackchan::CodexBleController::kAgentCount) return;
-  JsonDocument document;
-  document["type"] = "codex.focused";
-  document["payload"]["index"] = index;
-  String output;
-  serializeJson(document, output);
-  socket_client.sendTXT(output);
-}
-
 void sendBargeIn(const char* reason) {
   JsonDocument document;
   document["type"] = "barge_in";
@@ -682,7 +672,6 @@ void handleControl(const uint8_t* payload, size_t length) {
     // runtime cannot silently resume underneath it.
     if (face.codexMode()) {
       sendControl("conversation.suspend");
-      sendCodexFocused(codex.selectedAgent());
     }
   } else if (!server_connected) {
     // No physical control or audio state is accepted before the server proves
@@ -713,13 +702,6 @@ void handleControl(const uint8_t* payload, size_t length) {
     } else if (state == "idle") {
       lights.set(255, 105, 145, 0.08f, stackchan::LightAnimation::solid);
       if (!audio.playbackActive()) applyHeldFace();
-    }
-  } else if (type == "codex.session") {
-    const int index = body["index"] | -1;
-    const String title = body["title"] | "";
-    if (index >= 0 && index < stackchan::CodexBleController::kAgentCount &&
-        !title.isEmpty()) {
-      face.setCodexAgentTitle(static_cast<uint8_t>(index), title);
     }
   } else if (type == "approval.requested") {
     const float timeout_seconds = constrain(
@@ -973,15 +955,9 @@ void enterCodexMode() {
   face.setCodexVoiceState(stackchan::CodexVoiceState::idle);
   face.setCodexArchiveArmed(false);
   face.setCodexQueuedFollowup(false);
-  face.setCodexStatusOpen(false);
-  for (uint8_t index = 0; index < stackchan::CodexBleController::kAgentCount;
-       ++index) {
-    face.setCodexAgentTitle(index, "");
-  }
   codex_queued_followup = false;
   codex_archive_armed_until_ms = 0;
   syncCodexUi(true);
-  sendCodexFocused(codex.selectedAgent());
   // Entering the mode is visual only. Do not turn a navigation gesture into
   // unsolicited servo motion.
   last_codex_motion_state = codex.agent(codex.selectedAgent()).state();
@@ -1001,7 +977,6 @@ void exitCodexMode() {
   face.setCodexVoiceState(stackchan::CodexVoiceState::idle);
   face.setCodexArchiveArmed(false);
   face.setCodexQueuedFollowup(false);
-  face.setCodexStatusOpen(false);
   face.setCodexMode(false);
   lights.set(255, 105, 145, 0.08f, stackchan::LightAnimation::solid);
 }
@@ -1010,7 +985,7 @@ void handleTouch(uint32_t now_ms) {
   const auto& detail = M5.Touch.getDetail(0);
   if (face.codexMode()) {
     const auto state = codex.agent(codex.selectedAgent()).state();
-    const bool mic_region = !face.codexStatusOpen() && detail.y >= 181 &&
+    const bool mic_region = detail.y >= 181 &&
                             state != stackchan::CodexAgentState::needs_input;
     if (!codex_mic_pressed && detail.wasPressed() && mic_region) {
       // Clear every existing local cue before dictation so the laptop receives
@@ -1079,23 +1054,15 @@ void handleTouch(uint32_t now_ms) {
       codex_queued_followup = false;
       face.setCodexArchiveArmed(false);
       face.setCodexQueuedFollowup(false);
-      face.setCodexStatusOpen(false);
       audio.playUiSound(codex.connected()
                             ? stackchan::UiSoundEffect::agent_select
                             : stackchan::UiSoundEffect::error,
                         static_cast<uint8_t>(agent));
       codex.selectAgent(static_cast<uint8_t>(agent));
-      sendCodexFocused(static_cast<uint8_t>(agent));
       // Agent navigation updates the screen/lights but never moves the head.
       last_codex_motion_state = codex.agent(agent).state();
       return;
     }
-    if (y >= 59 && y < 124 && x >= 260) {
-      face.setCodexStatusOpen(!face.codexStatusOpen());
-      audio.playUiSound(stackchan::UiSoundEffect::agent_select);
-      return;
-    }
-    if (face.codexStatusOpen()) return;
     if (y >= 126) {
       const auto state = codex.agent(codex.selectedAgent()).state();
       if (state == stackchan::CodexAgentState::needs_input) {
@@ -1183,7 +1150,6 @@ void handleTouch(uint32_t now_ms) {
 void syncCodexUi(bool force) {
   const bool dirty = codex.consumeUiDirty();
   if (!force && !dirty) return;
-  face.setCodexConnected(codex.connected());
   face.setCodexSelectedAgent(codex.selectedAgent());
   for (uint8_t index = 0; index < stackchan::CodexBleController::kAgentCount;
        ++index) {

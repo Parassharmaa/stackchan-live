@@ -135,7 +135,6 @@ def test_approved_phosphor_fill_icons_are_rendered_as_firmware_bitmaps() -> None
         "archive_28",
         "arrow_bend_up_right_28",
         "microphone_36",
-        "list_checks_20",
     )
     for name in expected:
         assert f"uint8_t {name}[] PROGMEM" in icons
@@ -145,20 +144,18 @@ def test_approved_phosphor_fill_icons_are_rendered_as_firmware_bitmaps() -> None
     assert not re.search(r"void draw(?:Bolt|NewChat|Fork|Archive|Steer|Mic)Icon", face)
 
 
-def test_codex_status_panel_is_factual_and_blocks_underlying_controls() -> None:
+def test_codex_center_panel_is_minimal_without_title_or_status_overlay() -> None:
     main = MAIN_SOURCE.read_text()
     face = FACE_SOURCE.read_text()
     header = FACE_HEADER.read_text()
-    assert "setCodexStatusOpen" in header
-    assert "codexStatusOpen" in header
-    assert "TASK STATUS" in face
-    assert "Work is in progress" in face
-    assert "Completed on laptop" in face
-    assert 'codex_connected_ ? "Connected" : "Disconnected"' in face
-    assert 'codex_queued_followup_ ? "Follow-up waiting" : "Nothing queued"' in face
-    assert "y >= 59 && y < 124 && x >= 260" in main
-    assert "if (face.codexStatusOpen()) return;" in main
-    assert "!face.codexStatusOpen() && detail.y >= 181" in main
+    assert "codexAgentStateName(selected_state)" in face
+    assert "codex_agent_titles_" not in header
+    assert "codex_agent_titles_" not in face
+    assert "TASK STATUS" not in face
+    assert "list_checks_20" not in face
+    assert "setCodexStatusOpen" not in header
+    assert "codexStatusOpen" not in main
+    assert "detail.y >= 181" in main
 
 
 def test_avatar_hud_shows_ntp_time_and_live_battery_level() -> None:
@@ -242,7 +239,7 @@ def test_codex_audio_session_is_isolated_and_resumes_on_exit() -> None:
     assert 'sendControl("conversation.resume");' in main[exit_mode:touch]
     reconnect = main.index("if (face.codexMode()) {", main.index('type == "hello.ack"'))
     assert 'sendControl("conversation.suspend");' in main[reconnect : reconnect + 180]
-    assert "sendCodexFocused(codex.selectedAgent());" in main[reconnect : reconnect + 180]
+    assert "sendCodexFocused" not in main
     assert "if (conversation_paused_) return;" in audio
     assert "if (conversation_paused_ || !connected_" in audio
     assert "if (audio.conversationPaused()) break;" in main
@@ -284,22 +281,17 @@ def test_new_chat_uses_native_shortcut_and_queued_steer_uses_micro_action() -> N
     assert "face.setCodexQueuedFollowup(codex_queued_followup)" in main
 
 
-def test_codex_titles_are_bound_only_after_the_physical_slot_is_focused() -> None:
+def test_codex_slot_selection_has_no_chat_title_sync_protocol() -> None:
     app = APP_SOURCE.read_text()
     main = MAIN_SOURCE.read_text()
     face = FACE_SOURCE.read_text()
-    assert "recent_codex_titles" in app
-    assert 'command.type == "codex.focused"' in app
-    assert '"codex.session", index=index, title=titles[0]' in app
-    assert 'type == "codex.session"' in main
-    assert 'document["type"] = "codex.focused"' in main
-    assert 'document["payload"]["index"] = index' in main
-    assert "sendCodexFocused(static_cast<uint8_t>(agent))" in main
-    assert "sendCodexFocused(codex.selectedAgent())" in main
-    assert 'control("codex.sessions", titles=titles)' not in app
-    assert "face.setCodexAgentTitle" in main
-    assert "codex_agent_titles_[codex_selected_agent_]" in face
-    assert 'String("ACTIVE AGENT  ")' not in face
+    assert "recent_codex_titles" not in app
+    assert 'command.type == "codex.focused"' not in app
+    assert 'type == "codex.session"' not in main
+    assert 'document["type"] = "codex.focused"' not in main
+    assert "sendCodexFocused" not in main
+    assert "setCodexAgentTitle" not in main
+    assert "codex_agent_titles_" not in face
 
 
 def test_mic_release_waits_for_host_completion_then_submits() -> None:

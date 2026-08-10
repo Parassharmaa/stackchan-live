@@ -15,7 +15,6 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from .codex_sessions import recent_codex_titles
 from .config import PROJECT_ROOT, Settings
 from .echo import EchoCanceller
 from .eve_provider import EveLLM
@@ -3456,22 +3455,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 "received_monotonic_ns": time.perf_counter_ns(),
                             }
                         )
-                elif command.type == "codex.focused":
-                    index = command.payload.get("index")
-                    if conversation_suspended and isinstance(index, int) and 0 <= index < 6:
-                        # The BLE focus gesture reaches Codex before this Wi-Fi
-                        # message. Give the desktop a short window to persist
-                        # the focused thread's new recency, then bind only that
-                        # verified title to the physical slot. The Micro status
-                        # protocol itself contains no thread IDs or labels.
-                        await asyncio.sleep(0.25)
-                        titles = await asyncio.to_thread(recent_codex_titles, 1)
-                        if titles:
-                            await send_text(
-                                control(
-                                    "codex.session", index=index, title=titles[0]
-                                ).encode()
-                            )
                 elif command.type == "conversation.resume":
                     conversation_suspended = False
                     microphone.clear()

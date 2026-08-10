@@ -30,15 +30,11 @@ class FaceRenderer {
   void setStatus(const String& status);
   void setCodexMode(bool enabled);
   bool codexMode() const { return codex_mode_; }
-  void setCodexConnected(bool connected);
   void setCodexSelectedAgent(uint8_t index);
   void setCodexAgentState(uint8_t index, CodexAgentState state, uint32_t color);
-  void setCodexAgentTitle(uint8_t index, const String& title);
   void setCodexVoiceState(CodexVoiceState state) { codex_voice_state_ = state; }
   void setCodexArchiveArmed(bool armed) { codex_archive_armed_ = armed; }
   void setCodexQueuedFollowup(bool queued) { codex_queued_followup_ = queued; }
-  void setCodexStatusOpen(bool open) { codex_status_open_ = open; }
-  bool codexStatusOpen() const { return codex_status_open_; }
   void update(uint32_t now_ms);
   bool speakingFramesCached() const { return speaking_frames_cached_; }
   uint32_t speakingMouthTransitions() const { return speaking_mouth_transitions_; }
@@ -77,15 +73,12 @@ class FaceRenderer {
   uint32_t last_battery_read_ms_ = 0;
   int battery_level_ = 0;
   bool codex_mode_ = false;
-  bool codex_connected_ = false;
   uint8_t codex_selected_agent_ = 0;
   std::array<CodexAgentState, 6> codex_agent_states_{};
   std::array<uint32_t, 6> codex_agent_colors_{};
-  std::array<String, 6> codex_agent_titles_{};
   CodexVoiceState codex_voice_state_ = CodexVoiceState::idle;
   bool codex_archive_armed_ = false;
   bool codex_queued_followup_ = false;
-  bool codex_status_open_ = false;
 };
 
 FaceState faceStateFromString(const String& value);

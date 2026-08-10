@@ -106,10 +106,6 @@ void FaceRenderer::setCodexMode(bool enabled) {
   last_frame_ms_ = 0;
 }
 
-void FaceRenderer::setCodexConnected(bool connected) {
-  codex_connected_ = connected;
-}
-
 void FaceRenderer::setCodexSelectedAgent(uint8_t index) {
   if (index < codex_agent_states_.size()) codex_selected_agent_ = index;
 }
@@ -119,11 +115,6 @@ void FaceRenderer::setCodexAgentState(uint8_t index, CodexAgentState state,
   if (index >= codex_agent_states_.size()) return;
   codex_agent_states_[index] = state;
   codex_agent_colors_[index] = color;
-}
-
-void FaceRenderer::setCodexAgentTitle(uint8_t index, const String& title) {
-  if (index >= codex_agent_titles_.size()) return;
-  codex_agent_titles_[index] = title;
 }
 
 void FaceRenderer::update(uint32_t now_ms) {
@@ -352,25 +343,13 @@ void FaceRenderer::drawCodex(uint32_t now_ms) {
     canvas_.fillCircle(68, 85 - blink_offset, 2, face_ink);
     canvas_.drawLine(51, 99, 63, 99, face_ink);
   }
-  canvas_.setTextDatum(textdatum_t::top_left);
-  canvas_.setTextColor(color565(kCodexMuted));
-  String title = codex_agent_titles_[codex_selected_agent_];
-  if (title.isEmpty()) title = String("TASK ") + (codex_selected_agent_ + 1);
-  title.replace("\n", " ");
-  if (title.length() > 24) title = title.substring(0, 21) + "...";
-  canvas_.drawString(title, 100, 69);
+  // The selected slot and its live state are enough context on this tiny
+  // display. Keep the center panel free of chat titles and secondary controls.
+  canvas_.setTextDatum(textdatum_t::middle_left);
   canvas_.setTextColor(color565(kCodexText));
   canvas_.setTextSize(2);
-  canvas_.drawString(codexAgentStateName(selected_state), 100, 91);
+  canvas_.drawString(codexAgentStateName(selected_state), 100, 90);
   canvas_.setTextSize(1);
-  const uint32_t status_fill = codex_status_open_ ? 0x334263 : 0x272B3D;
-  const uint16_t status_ink = color565(codex_status_open_ ? 0xB9C8FF : 0xAEB4C8);
-  canvas_.fillRoundRect(270, 71, 29, 38, 10, color565(status_fill));
-  canvas_.drawRoundRect(270, 71, 29, 38, 10, color565(0x47506A));
-  canvas_.drawBitmap(275, 80, codex_icons::list_checks_20, 20, 20, status_ink);
-  const uint16_t live_dot = color565(
-      selected_state == CodexAgentState::error ? 0xFF6B88 : 0x8BFFBC);
-  canvas_.fillCircle(294, 76, 3, live_dot);
   canvas_.setTextDatum(textdatum_t::middle_center);
 
   const bool approval = selected_state == CodexAgentState::needs_input;
@@ -385,35 +364,6 @@ void FaceRenderer::drawCodex(uint32_t now_ms) {
     canvas_.drawCircle(238, 181, 20, approve_ink);
     canvas_.drawLine(226, 181, 235, 190, approve_ink);
     canvas_.drawLine(235, 190, 252, 171, approve_ink);
-  } else if (codex_status_open_) {
-    canvas_.fillRoundRect(8, 128, 304, 104, 17, color565(0x202436));
-    canvas_.drawRoundRect(8, 128, 304, 104, 17, color565(0x3A4057));
-    canvas_.setTextDatum(textdatum_t::top_left);
-    canvas_.setTextColor(color565(0xB9C8FF));
-    canvas_.drawBitmap(20, 139, codex_icons::list_checks_20, 20, 20,
-                       color565(0xB9C8FF));
-    canvas_.setTextSize(1);
-    canvas_.drawString("TASK STATUS", 48, 143);
-    canvas_.setTextColor(color565(kCodexText));
-    String summary;
-    switch (selected_state) {
-      case CodexAgentState::working: summary = "Work is in progress"; break;
-      case CodexAgentState::complete: summary = "Completed on laptop"; break;
-      case CodexAgentState::needs_input: summary = "Waiting for your input"; break;
-      case CodexAgentState::error: summary = "Task needs attention"; break;
-      case CodexAgentState::idle: summary = "Ready for a message"; break;
-      case CodexAgentState::off: summary = "No task assigned"; break;
-    }
-    canvas_.drawString(summary, 48, 157);
-    canvas_.drawFastHLine(20, 174, 280, color565(0x363B50));
-    canvas_.setTextColor(color565(kCodexMuted));
-    canvas_.drawString("HOST", 20, 183);
-    canvas_.drawString("QUEUE", 20, 205);
-    canvas_.setTextColor(color565(kCodexText));
-    canvas_.drawString(codex_connected_ ? "Connected" : "Disconnected", 78, 183);
-    canvas_.drawString(codex_queued_followup_ ? "Follow-up waiting" : "Nothing queued",
-                       78, 205);
-    canvas_.setTextDatum(textdatum_t::middle_center);
   } else {
     // Five compact icon keys keep utility actions available without spending
     // scarce pixels on labels. The wide mic below remains the clear primary
