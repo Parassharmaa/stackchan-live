@@ -80,7 +80,14 @@ def meaningful_transcript(transcript: str) -> bool:
     if re.fullmatch(r"(?:\[.*]|\(.*\)|<.*>|\*.*\*)", text):
         return False
     normalized = text.casefold().replace("_", " ")
-    return normalized not in {"blank audio", "silence", "music", "noise"}
+    if normalized in {"blank audio", "silence", "music", "noise"}:
+        return False
+    # English and Japanese are the supported conversation languages. Whisper
+    # occasionally emits a run of unrelated-script glyphs for room noise; do
+    # not spend an LLM turn answering that hallucinated caption.
+    supported = re.findall(r"[a-z0-9\u3040-\u30ff\u3400-\u9fff]", normalized)
+    alphanumeric = [character for character in normalized if character.isalnum()]
+    return bool(supported) and len(supported) >= max(1, len(alphanumeric) // 2)
 
 
 class CascadePipeline:

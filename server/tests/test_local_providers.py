@@ -213,18 +213,50 @@ async def test_bilingual_router_selects_large_japanese_decode_without_small() ->
 
 @pytest.mark.asyncio
 async def test_bilingual_router_honors_explicit_language_mode() -> None:
-    fast = StubSTT(("hello", "en"))
+    fast = StubSTT(("こんにちは", "ja"))
     japanese = StubSTT(("こんにちは", "ja"))
     router = BilingualWhisperSTT(fast, japanese)
 
     router.set_language_mode("ja")
     assert await router.transcribe(b"audio", 16_000) == ("こんにちは", "ja")
     assert router.last_route["route"] == "forced_japanese"
-    assert not fast.called
+    assert fast.called
 
+    fast.result = ("hello", "en")
     router.set_language_mode("en")
     assert await router.transcribe(b"audio", 16_000) == ("hello", "en")
     assert router.last_route["route"] == "forced_english"
+
+
+@pytest.mark.asyncio
+async def test_forced_japanese_mode_recovers_english_words_without_changing_reply_language(
+) -> None:
+    fast = StubSTT(("Which model are you using?", "en"))
+    japanese = StubSTT(("普通のモデルがパンサイドを使っています", "ja"))
+    router = BilingualWhisperSTT(fast, japanese)
+
+    router.set_language_mode("ja")
+    assert await router.transcribe(b"audio", 16_000) == (
+        "Which model are you using?",
+        "ja",
+    )
+    assert router.last_route["route"] == "forced_japanese_english_recovery"
+    assert router.last_route["fallback"] is True
+
+
+@pytest.mark.asyncio
+async def test_forced_english_mode_recovers_japanese_decode_without_changing_reply_language(
+) -> None:
+    fast = StubSTT(("モデルは何ですか", "ja"))
+    japanese = StubSTT(("どのモデルを使っていますか？", "ja"))
+    router = BilingualWhisperSTT(fast, japanese)
+
+    router.set_language_mode("en")
+    assert await router.transcribe(b"audio", 16_000) == (
+        "どのモデルを使っていますか？",
+        "en",
+    )
+    assert router.last_route["route"] == "forced_english_japanese_recovery"
 
 
 @pytest.mark.asyncio

@@ -749,6 +749,7 @@ def test_non_speech_transcripts_are_rejected() -> None:
     assert not meaningful_transcript("*cough*")
     assert not meaningful_transcript("[BLANK_AUDIO]")
     assert not meaningful_transcript("[Crying]")
+    assert not meaningful_transcript("ទ្្្្្្្្្")
     assert meaningful_transcript("こんにちは")
 
 

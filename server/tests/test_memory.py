@@ -41,6 +41,20 @@ def test_wake_name_only_never_retrieves_an_unrelated_memory(tmp_path: Path) -> N
     store.close()
 
 
+def test_legacy_multi_intent_memory_never_contaminates_questions(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.remember(
+        "こんにちはスタックちゃん左を向いて私がコーヒーが好きだ",
+        language="ja",
+        kind="explicit",
+    )
+
+    assert store.retrieve("スタックちゃんは言葉を読めますか？") == []
+    assert store.retrieve("スタックちゃん、サービスを作れますか？") == []
+    assert store.retrieve("コーヒーについて教えて") == []
+    store.close()
+
+
 def test_legacy_corrupt_robot_subject_profile_is_never_retrieved(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path / "memory.sqlite3")
     store.remember(

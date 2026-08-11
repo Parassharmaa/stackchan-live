@@ -383,18 +383,43 @@ class BilingualWhisperSTT(STTProvider):
 
     async def transcribe(self, pcm16: bytes, sample_rate: int) -> tuple[str, str]:
         if self.language_mode == "en":
-            text, _ = await self.fast.transcribe(pcm16, sample_rate)
-            self.last_route = {"route": "forced_english", "fallback": False}
+            text, detected_language = await self.fast.transcribe(pcm16, sample_rate)
+            fallback = detected_language == "ja"
+            if fallback:
+                provider = self.japanese_fast or self.japanese
+                if hasattr(provider, "transcribe_detailed"):
+                    text = (await provider.transcribe_detailed(pcm16, sample_rate)).text
+                else:
+                    text, _ = await provider.transcribe(pcm16, sample_rate)
+            self.last_route = {
+                "route": "forced_english_japanese_recovery" if fallback else "forced_english",
+                "fallback": fallback,
+                "detected_language": detected_language,
+            }
             self.last_language = "en"
             return text, "en"
         if self.language_mode == "ja":
             provider = self.japanese_fast or self.japanese
+            fast_task = asyncio.create_task(self.fast.transcribe(pcm16, sample_rate))
             if hasattr(provider, "transcribe_detailed"):
                 result = await provider.transcribe_detailed(pcm16, sample_rate)
                 text = result.text
             else:
                 text, _ = await provider.transcribe(pcm16, sample_rate)
-            self.last_route = {"route": "forced_japanese", "fallback": False}
+            fast_text, detected_language = await fast_task
+            fallback = (
+                detected_language == "en"
+                and detect_language(fast_text) == "en"
+                and bool(re.search(r"[A-Za-z]", fast_text))
+                and not is_nonspeech_caption(fast_text)
+            )
+            if fallback:
+                text = fast_text
+            self.last_route = {
+                "route": "forced_japanese_english_recovery" if fallback else "forced_japanese",
+                "fallback": fallback,
+                "detected_language": detected_language,
+            }
             self.last_language = "ja"
             return text, "ja"
         robust_language = self._robust_next_language

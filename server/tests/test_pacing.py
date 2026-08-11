@@ -23,6 +23,7 @@ from stackchan_agent.app import (
     motion_capture_allows_speech_start,
     motion_capture_is_guarded,
     ordinary_capture_allows_speech_start,
+    ordinary_head_gesture_allows_reaction,
     pairing_proof,
     pairing_response_matches,
     physical_playback_is_drained,
@@ -80,6 +81,18 @@ def test_pending_turn_or_embodied_reaction_rejects_background_capture() -> None:
     )
     assert not ordinary_capture_allows_speech_start(
         turn_active=False, motion_allows_start=False
+    )
+
+
+def test_casual_head_gesture_never_replaces_an_unanswered_turn() -> None:
+    assert not ordinary_head_gesture_allows_reaction(
+        turn_active=True, playback_guarded=False
+    )
+    assert not ordinary_head_gesture_allows_reaction(
+        turn_active=False, playback_guarded=True
+    )
+    assert ordinary_head_gesture_allows_reaction(
+        turn_active=False, playback_guarded=False
     )
 
 

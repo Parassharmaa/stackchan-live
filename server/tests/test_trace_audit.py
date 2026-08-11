@@ -174,6 +174,24 @@ def test_audit_rejects_an_empty_trace() -> None:
     assert result["passed"] is False
 
 
+def test_audit_flags_a_casual_head_gesture_that_erased_a_pending_answer() -> None:
+    events = [
+        event("stt", 1, transcript="Can you explain this?", language="en"),
+        event("barge_in", 2, reason="sensor_head"),
+        event("sensor_llm", 3, gesture="touch", response="Boop!"),
+    ]
+
+    result = MODULE.analyze(events)
+
+    assert result["regressions"] == [
+        {
+            "type": "head_gesture_cancelled_turn",
+            "transcript": "Can you explain this?",
+        }
+    ]
+    assert result["passed"] is False
+
+
 def test_audit_requires_terminal_evidence_for_a_planned_state_change() -> None:
     events = [
         event("stt", 1, transcript="Turn the lights blue.", language="en"),

@@ -352,16 +352,26 @@ def _wake_name_only(query: str) -> bool:
 
 
 def _legacy_profile_is_corrupt(memory: Memory) -> bool:
-    """Hide profile rows produced by the old subjectless-Japanese parser."""
-    if memory.kind != "profile":
-        return False
+    """Hide malformed rows produced by earlier broad memory extraction."""
     normalized = unicodedata.normalize("NFKC", memory.content).casefold()
-    return bool(
+    invalid_profile_subject = memory.kind == "profile" and bool(
         re.match(
             r"^ユーザーは(?:あなた|君|きみ|スタックちゃん|すたっくちゃん|stack-chan)(?:が|は)",
             normalized,
         )
     )
+    # Old explicit-memory extraction could persist an entire multi-intent turn,
+    # including the wake phrase and a device command. Its shared "Stack-chan"
+    # n-grams then polluted nearly every later Japanese question.
+    mixed_command_memory = memory.kind in {"explicit", "fact"} and bool(
+        re.search(
+            r"(?:左|右|上|下).{0,8}(?:向いて|見て)|"
+            r"(?:turn|look).{0,12}(?:left|right|up|down)",
+            normalized,
+        )
+        and re.search(r"(?:好き|嫌い|苦手|\blike\b|\bdislike\b|\blove\b|\bhate\b)", normalized)
+    )
+    return invalid_profile_subject or mixed_command_memory
 
 
 def _requests_preferred_name(query: str) -> bool:

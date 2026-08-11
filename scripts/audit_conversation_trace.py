@@ -144,9 +144,33 @@ def conversation_turns(events: list[dict]) -> list[dict]:
     return turns
 
 
+def head_sensor_cancelled_transcripts(events: list[dict]) -> list[str]:
+    """Find questions that ended at a casual head event without an LLM result."""
+    pending = ""
+    cancelled: list[str] = []
+    for event in sorted(events, key=lambda item: item.get("start_ns", 0)):
+        attributes = event.get("attributes", {})
+        name = event.get("name")
+        if name == "stt":
+            pending = str(attributes.get("transcript", "")).strip()
+        elif name == "llm":
+            pending = ""
+        elif (
+            name == "barge_in"
+            and attributes.get("reason") == "sensor_head"
+            and pending
+        ):
+            cancelled.append(pending)
+            pending = ""
+    return cancelled
+
+
 def analyze(events: list[dict], *, tail_turns: int = 50) -> dict:
     turns = conversation_turns(events)[-tail_turns:]
-    regressions: list[dict] = []
+    regressions: list[dict] = [
+        {"type": "head_gesture_cancelled_turn", "transcript": transcript}
+        for transcript in head_sensor_cancelled_transcripts(events)
+    ]
     first_tokens: list[float] = []
     totals: list[float] = []
     instrumented = 0

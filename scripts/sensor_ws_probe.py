@@ -51,7 +51,10 @@ async def probe(url: str, gesture: str) -> dict:
         # Drain both so that stale idle cannot terminate the sensor reaction
         # loop before its routine and generated audio arrive.
         while True:
-            handshake = await asyncio.wait_for(socket.recv(), timeout=3)
+            # Eve warms a dedicated session before the acknowledgement. A cold
+            # local sandbox can legitimately take several seconds, so this
+            # probe must not report the head sensor as broken after only 3 s.
+            handshake = await asyncio.wait_for(socket.recv(), timeout=20)
             if isinstance(handshake, str):
                 event = ControlMessage.decode(handshake)
                 if event.type == "hello.ack":
@@ -80,6 +83,7 @@ async def probe(url: str, gesture: str) -> dict:
         )
         audio: list[AudioFrame] = []
         routine = None
+        routine_ms = None
         text = None
         speaking_ms = None
         first_audio_ms = None
@@ -93,6 +97,7 @@ async def probe(url: str, gesture: str) -> dict:
             event = ControlMessage.decode(message)
             if event.type == "routine.play":
                 routine = event.payload.get("name")
+                routine_ms = elapsed_ms
             elif event.type == "session.state" and event.payload.get("state") == "speaking":
                 speaking_ms = elapsed_ms
             elif event.type == "response.text.done":
@@ -106,6 +111,7 @@ async def probe(url: str, gesture: str) -> dict:
             "swipe_backward": "curious",
         }[gesture]
         assert routine == expected_routine
+        assert routine_ms is not None and routine_ms < 500
         assert audio and audio[0].flags & AudioFlags.START
         assert audio[-1].flags & AudioFlags.END
         assert text
@@ -113,6 +119,7 @@ async def probe(url: str, gesture: str) -> dict:
             "routine": routine,
             "gesture": gesture,
             "text": text,
+            "routine_ms": routine_ms,
             "speaking_ms": speaking_ms,
             "first_audio_ms": first_audio_ms,
             "audio_frames": len(audio),

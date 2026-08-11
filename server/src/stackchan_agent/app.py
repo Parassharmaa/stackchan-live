@@ -146,6 +146,13 @@ def should_accept_head_gesture(
     return last_accepted_at <= 0 or now - last_accepted_at >= cooldown_seconds
 
 
+def ordinary_head_gesture_allows_reaction(
+    *, turn_active: bool, playback_guarded: bool
+) -> bool:
+    """Never let a casual pat replace an unanswered conversation turn."""
+    return not turn_active and not playback_guarded
+
+
 def motion_capture_is_guarded(
     active_request_ids: set[str], *, now: float, guarded_until: float
 ) -> bool:
@@ -2489,9 +2496,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             event_context = str(reaction[language])
             action_results = [
-                f"The {reaction['routine']} routine is planned and will begin "
-                "together with this spoken reaction."
+                f"The {reaction['routine']} routine was dispatched immediately as tactile "
+                "acknowledgement; do not claim that it physically completed."
             ]
+            # Give physical acknowledgement immediately. Waiting for Eve before
+            # dispatch made a healthy head tap look dead for several seconds.
+            # The generated sentence still follows through the normal TTS path.
+            await send_text(
+                control(
+                    "routine.play",
+                    name=reaction["routine"],
+                    intensity=0.8,
+                    music=bool(reaction.get("music", reaction["routine"] == "dance")),
+                ).encode()
+            )
             if bool(reaction.get("capture_photo", False)):
                 pose_result = await execute_embodied_control(
                     "motion.set",
@@ -2548,17 +2566,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 attrs["response"] = text
             if not text:
                 raise RuntimeError("local LLM returned an empty sensor reaction")
-            # Generate first, then start motion and audio together. Dispatching
-            # before local generation let short routines finish seconds before
-            # the dialogue began.
-            await send_text(
-                control(
-                    "routine.play",
-                    name=reaction["routine"],
-                    intensity=0.8,
-                    music=bool(reaction.get("music", reaction["routine"] == "dance")),
-                ).encode()
-            )
             await send_text(
                 control(
                     "playback.configure",
@@ -3521,6 +3528,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 elif command.type == "sensor.head":
                     gesture = str(command.payload.get("gesture", "touch"))
                     loop_now = asyncio.get_running_loop().time()
+                    conversational_turn_active = bool(
+                        (turn_task and not turn_task.done())
+                        or (sensor_task and not sensor_task.done())
+                    )
                     playback_sensor_guard = (
                         device_playback_active
                         or is_speaking()
@@ -3551,12 +3562,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 }
                             )
                     if gesture in {"touch", "hold", "swipe_forward", "swipe_backward"}:
+                        reaction_allowed = ordinary_head_gesture_allows_reaction(
+                            turn_active=conversational_turn_active,
+                            playback_guarded=playback_sensor_guard,
+                        )
                         gesture_accepted = should_accept_head_gesture(
                             now=loop_now,
                             last_accepted_at=last_head_gesture_accepted_at,
                             cooldown_seconds=settings.head_gesture_cooldown_ms / 1_000,
                         )
-                        if device_id and not playback_sensor_guard and not gesture_accepted:
+                        if device_id and conversational_turn_active:
+                            results_for(device_id).append(
+                                {
+                                    "type": "telemetry",
+                                    "component": "sensor_head_suppressed",
+                                    "gesture": gesture,
+                                    "reason": "turn_active",
+                                    "received_monotonic_ns": time.perf_counter_ns(),
+                                }
+                            )
+                        elif device_id and not playback_sensor_guard and not gesture_accepted:
                             results_for(device_id).append(
                                 {
                                     "type": "telemetry",
@@ -3566,14 +3591,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     "received_monotonic_ns": time.perf_counter_ns(),
                                 }
                             )
-                        if not playback_sensor_guard and gesture_accepted:
+                        if reaction_allowed and gesture_accepted:
                             last_head_gesture_accepted_at = loop_now
-                            if (turn_task and not turn_task.done()) or (
-                                sensor_task and not sensor_task.done()
-                            ):
-                                await stop_playback("sensor_head")
-                                await await_stopped_producer(turn_task)
-                                await await_stopped_producer(sensor_task)
                             sensor_cancel.clear()
                             playback_abort.clear()
                             resume_playback_stream()
