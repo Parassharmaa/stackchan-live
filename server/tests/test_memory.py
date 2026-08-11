@@ -41,6 +41,21 @@ def test_wake_name_only_never_retrieves_an_unrelated_memory(tmp_path: Path) -> N
     store.close()
 
 
+def test_legacy_corrupt_robot_subject_profile_is_never_retrieved(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.remember(
+        "ユーザーはあなたが苦手です。",
+        language="ja",
+        kind="profile",
+        importance=0.8,
+        memory_key="preference:あなた",
+    )
+
+    assert store.retrieve("私について何を覚えていますか？") == []
+    assert store.retrieve("あなたについて") == []
+    store.close()
+
+
 def test_preferred_name_recall_crosses_the_conversation_language(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path / "memory.sqlite3")
     stored = store.capture_automatic_memories(

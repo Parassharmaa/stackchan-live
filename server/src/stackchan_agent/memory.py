@@ -351,6 +351,19 @@ def _wake_name_only(query: str) -> bool:
     }
 
 
+def _legacy_profile_is_corrupt(memory: Memory) -> bool:
+    """Hide profile rows produced by the old subjectless-Japanese parser."""
+    if memory.kind != "profile":
+        return False
+    normalized = unicodedata.normalize("NFKC", memory.content).casefold()
+    return bool(
+        re.match(
+            r"^ユーザーは(?:あなた|君|きみ|スタックちゃん|すたっくちゃん|stack-chan)(?:が|は)",
+            normalized,
+        )
+    )
+
+
 def _requests_preferred_name(query: str) -> bool:
     normalized = unicodedata.normalize("NFKC", query).casefold()
     return bool(
@@ -753,7 +766,11 @@ class MemoryStore:
                             importance DESC, updated_at DESC LIMIT ?""",
                 (time.time(), preferred_language, limit),
             ).fetchall()
-            return [self._from_row(row) for row in rows]
+            return [
+                memory
+                for row in rows
+                if not _legacy_profile_is_corrupt(memory := self._from_row(row))
+            ]
         if _requests_recent_episode(query):
             rows = self.connection.execute(
                 """SELECT * FROM memories
@@ -825,6 +842,11 @@ class MemoryStore:
                 ranked.append((containment + row["importance"] * 0.1, row))
             ranked.sort(key=lambda item: item[0], reverse=True)
             rows = [row for _, row in ranked[:limit]]
+        rows = [
+            row
+            for row in rows
+            if not _legacy_profile_is_corrupt(self._from_row(row))
+        ]
         if rows:
             ids = [row["id"] for row in rows]
             placeholders = ",".join("?" for _ in ids)
