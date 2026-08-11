@@ -38,7 +38,13 @@ export async function deviceRequest(
 
 export async function dispatchDeviceControl(
   eveSessionId: string,
-  type: "face.set" | "lights.set" | "motion.set" | "routine.play" | "camera.capture",
+  type:
+    | "face.set"
+    | "lights.set"
+    | "motion.set"
+    | "gesture.play"
+    | "routine.play"
+    | "camera.capture",
   payload: Record<string, unknown>,
 ): Promise<unknown> {
   return deviceRequest(eveSessionId, "/control", {

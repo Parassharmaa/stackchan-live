@@ -43,6 +43,15 @@ def test_fold_verdicts_does_not_turn_all_not_applicable_into_a_pass() -> None:
     assert MODULE.fold_verdicts(["true", "false", "na"]) == "false"
 
 
+def test_spoken_policy_hides_internal_action_verification_jargon() -> None:
+    instructions = (
+        Path(__file__).resolve().parents[2] / "intelligence/agent/instructions.md"
+    ).read_text(encoding="utf-8")
+    assert "Never speak internal\n  verification language" in instructions
+    assert "cannot confirm" in instructions
+    assert "offer one practical retry" in instructions
+
+
 def test_memory_behavior_calibrates_positive_and_negative_trajectories() -> None:
     positive = MODULE.judge_memory_behavior(
         {"memories": [], "response": "はい、ここにいるよ。"},
@@ -69,6 +78,7 @@ def test_memory_behavior_calibrates_positive_and_negative_trajectories() -> None
 def test_embodied_behavior_calibrates_positive_negative_and_outside_scope() -> None:
     positive = MODULE.judge_embodied_behavior(
         {"response": "どの色にしたい？"},
+        {"response": "My head was busy that time; I can nod once it is free."},
         {"response": "Would you like me to take one camera still?"},
         [],
         ["move_head", "capture_photo"],
@@ -76,6 +86,7 @@ def test_embodied_behavior_calibrates_positive_negative_and_outside_scope() -> N
     )
     lucky_correct_negative = MODULE.judge_embodied_behavior(
         {"response": "今、ライトは青になっています。"},
+        {"response": "I cannot confirm the tool result on the device."},
         {"response": "Would you like me to take one camera still?"},
         [],
         [],
@@ -83,5 +94,5 @@ def test_embodied_behavior_calibrates_positive_negative_and_outside_scope() -> N
     )
 
     assert positive["verdict"] == "true"
-    assert positive["occurrences"][2]["verdict"] == "na"
+    assert positive["occurrences"][3]["verdict"] == "na"
     assert lucky_correct_negative["verdict"] == "false"

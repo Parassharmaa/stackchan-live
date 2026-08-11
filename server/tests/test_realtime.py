@@ -144,6 +144,7 @@ async def test_realtime_streams_ga_audio_and_bilingual_transcript(tmp_path: Path
     assert session["audio"]["output"]["format"]["rate"] == 24_000
     assert {tool["name"] for tool in session["tools"]} >= {
         "move_head",
+        "perform_gesture",
         "set_lights",
         "play_routine",
         "remember_fact",

@@ -165,6 +165,8 @@ def test_profile_extraction_is_bilingual_stable_and_conservative() -> None:
     assert extract_profile_memories("What do I like?", "en") == []
     assert extract_profile_memories("私の好きな飲み物は何ですか。", "ja") == []
     assert extract_profile_memories("私の好きな飲み物は何ですか？", "ja") == []
+    assert extract_profile_memories("あなたが苦手です。", "ja") == []
+    assert extract_profile_memories("スタックちゃんが好きです。", "ja") == []
     assert extract_profile_memories("Call me Paras.", "en")[0].content.endswith(
         "called Paras."
     )
@@ -281,6 +283,25 @@ def test_automatic_capture_rejects_sensitive_and_command_turns(tmp_path: Path) -
         == []
     )
     assert len(store.list_recent(include_episodes=True)) == episode_count
+    store.close()
+
+
+@pytest.mark.parametrize(
+    ("transcript", "response", "language"),
+    [
+        ("Thank you.", "You're welcome!", "en"),
+        ("(door closes)", "It sounds like a door closed.", "en"),
+        ("そうですね。", "はい、そうですね。", "ja"),
+        ("ありがとう。", "どういたしまして。コーヒーが好きなんだよね。", "ja"),
+    ],
+)
+def test_automatic_episode_capture_rejects_filler_noise_and_memory_echo(
+    tmp_path: Path, transcript: str, response: str, language: str
+) -> None:
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+
+    assert store.capture_episode_memory(transcript, response, language) == []
+    assert store.list_recent(include_episodes=True) == []
     store.close()
 
 

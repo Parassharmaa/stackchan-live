@@ -21,7 +21,7 @@ from stackchan_agent.providers import (
     TurnContext,
 )
 from stackchan_agent.telemetry import TraceRecorder
-from stackchan_agent.tools import plan_tools, unsupported_action_feedback
+from stackchan_agent.tools import invoke_tool, plan_tools, unsupported_action_feedback
 
 
 class FastSentenceLLM(LLMProvider):
@@ -468,6 +468,33 @@ def test_motion_directions_are_complete_canonical_poses() -> None:
         motion = plan_tools(transcript, "en")[0]
         assert motion.arguments["yaw_deg"] == yaw
         assert motion.arguments["pitch_deg"] == pitch
+
+
+def test_bilingual_semantic_gestures_use_one_verified_gesture_tool() -> None:
+    cases = {
+        ("Please nod.", "en"): "nod",
+        ("Could you double-nod?", "en"): "double_nod",
+        ("Shake your head no.", "en"): "shake_no",
+        ("Please bow.", "en"): "bow",
+        ("Look attentive.", "en"): "attentive",
+        ("うなずいてください。", "ja"): "nod",
+        ("二回うなずいてください。", "ja"): "double_nod",
+        ("首を横に振ってください。", "ja"): "shake_no",
+        ("お辞儀してください。", "ja"): "bow",
+    }
+    for (transcript, language), gesture in cases.items():
+        planned = plan_tools(transcript, language)
+        assert [item.name for item in planned] == ["perform_gesture"]
+        assert planned[0].arguments == {"name": gesture, "intensity": 0.7}
+
+
+@pytest.mark.asyncio
+async def test_gesture_tool_emits_one_semantic_device_control() -> None:
+    command = await invoke_tool(
+        "perform_gesture", {"name": "double_nod", "intensity": 0.68}
+    )
+    assert command.type == "gesture.play"
+    assert command.payload == {"name": "double_nod", "intensity": 0.68}
 
 
 def test_motion_planner_accepts_bounded_spoken_angles() -> None:

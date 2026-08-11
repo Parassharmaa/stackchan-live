@@ -39,8 +39,8 @@ def _probability(value: Any) -> float:
 class MaaiDecision:
     behavior: str
     probability: float
-    pitch_deg: float | None = None
-    duration_ms: int = 450
+    gesture: str
+    intensity: float = 0.6
 
 
 class MaaiBehaviorArbiter:
@@ -81,16 +81,16 @@ class MaaiBehaviorArbiter:
                 and now - self._last_nod_at >= self.settings.maai_nod_cooldown_ms / 1_000
             ):
                 self._last_nod_at = now
-                pitch, duration = {
-                    "short": (51.0, 300),
-                    "long": (57.0, 520),
-                    "long_p": (39.0, 600),
+                gesture, intensity = {
+                    "short": ("nod", 0.55),
+                    "long": ("double_nod", 0.68),
+                    "long_p": ("attentive", 0.62),
                 }[nod_kind]
                 return MaaiDecision(
                     behavior=f"nod_{nod_kind}",
                     probability=nod_probability,
-                    pitch_deg=pitch,
-                    duration_ms=duration,
+                    gesture=gesture,
+                    intensity=intensity,
                 )
 
         backchannel = result.get(
@@ -107,7 +107,7 @@ class MaaiBehaviorArbiter:
                 >= self.settings.maai_backchannel_cooldown_ms / 1_000
             ):
                 self._last_backchannel_at = now
-                return MaaiDecision("backchannel", probability)
+                return MaaiDecision("backchannel", probability, "attentive", 0.5)
         return None
 
 

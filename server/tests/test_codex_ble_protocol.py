@@ -124,6 +124,27 @@ def test_touch_ui_maps_agents_actions_and_contextual_approval() -> None:
     assert 'drawString("<"' not in face
 
 
+def test_right_swipe_settings_persists_and_syncs_language_mode() -> None:
+    main = MAIN_SOURCE.read_text()
+    face = FACE_SOURCE.read_text()
+    header = FACE_HEADER.read_text()
+    app = APP_SOURCE.read_text()
+
+    assert 'preferences.begin("stackchan-ui", true)' in main
+    assert 'preferences.begin("stackchan-ui", false)' in main
+    assert 'hello["payload"]["language"] = language_mode;' in main
+    assert 'document["type"] = "settings.update";' in main
+    assert "face.setSettingsMode(true);" in main
+    assert "detail.distanceX() > 0" in main
+    assert "face.setSettingsMode(false);" in main
+    assert 'const char* modes[] = {"auto", "en", "ja"};' in main
+    assert "void drawSettings()" in header
+    assert 'canvas_.drawString("Language", 160, 42);' in face
+    assert 'const char* modes[] = {"AUTO", "EN", "JP"};' in face
+    assert 'elif command.type == "settings.update":' in app
+    assert "stt.set_language_mode(language_mode)" in app
+
+
 def test_approved_phosphor_fill_icons_are_rendered_as_firmware_bitmaps() -> None:
     face = FACE_SOURCE.read_text()
     icons = CODEX_ICONS.read_text()
@@ -184,6 +205,21 @@ def test_codex_indicator_animation_is_static_by_default_and_host_controlled() ->
     assert "codex_agent_speeds_[index]" in face
     assert "agent.effect" in main
     assert "agent.speed" in main
+
+
+def test_semantic_gestures_have_verified_firmware_sequences() -> None:
+    main = MAIN_SOURCE.read_text()
+    for symbol in (
+        "kNodMotion",
+        "kDoubleNodMotion",
+        "kShakeNoMotion",
+        "kBowMotion",
+        "kAttentiveMotion",
+    ):
+        assert symbol in main
+    assert 'type == "gesture.play"' in main
+    assert 'active_sequence_tool = "perform_gesture"' in main
+    assert 'document["payload"]["gesture"] = active_routine_name' in main
 
 
 def test_agent_touch_emits_double_activation_and_uses_duplex_safe_sounds() -> None:

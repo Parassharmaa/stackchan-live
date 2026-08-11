@@ -903,6 +903,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def extend_motion_capture_guard(device_id: str, message: ControlMessage) -> None:
         if message.type == "motion.set":
             duration_ms = max(0, min(int(message.payload.get("duration_ms", 450)), 2500))
+        elif message.type == "gesture.play":
+            duration_ms = {
+                "nod": 800,
+                "double_nod": 1300,
+                "shake_no": 1400,
+                "bow": 1250,
+                "attentive": 1350,
+            }.get(str(message.payload.get("name", "nod")), 1400)
         elif message.type == "routine.play":
             duration_ms = {
                 "greet": 1600,
@@ -1340,6 +1348,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "face.set",
             "lights.set",
             "motion.set",
+            "gesture.play",
             "motion.diagnose",
             "routine.play",
             "camera.capture",
@@ -1422,6 +1431,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         device_id: str | None = None
         authenticated = False
         preferred_language = "en"
+        language_mode = "auto"
         playback_started_at = 0.0
         playback_until = 0.0
         voice_barge_started_ns = 0
@@ -1486,7 +1496,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     extend_motion_capture_guard(device_id, outgoing)
                     if (
                         outgoing.request_id
-                        and outgoing.type in {"motion.set", "routine.play"}
+                        and outgoing.type in {"motion.set", "gesture.play", "routine.play"}
                     ):
                         active_motion_request_ids.add(outgoing.request_id)
                 except (TypeError, ValueError):
@@ -1504,30 +1514,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return True
 
         async def perform_maai_behavior(decision: MaaiDecision) -> None:
-            """Perform a subtle two-step nod without entering the LLM turn."""
+            """Dispatch one semantic gesture without entering the LLM turn."""
             if not device_id:
                 return
-            request_id = secrets.token_hex(8)
-            pitch = decision.pitch_deg
-            if pitch is None:
-                # A backchannel prediction becomes a tiny embodied
-                # acknowledgement; spoken interjections would overlap the user.
-                pitch = 49.0
             await send_text(
                 control(
-                    "motion.set",
-                    request_id=request_id,
-                    pitch_deg=pitch,
-                    duration_ms=decision.duration_ms,
-                ).encode()
-            )
-            await asyncio.sleep((decision.duration_ms + 120) / 1_000)
-            await send_text(
-                control(
-                    "motion.set",
+                    "gesture.play",
                     request_id=secrets.token_hex(8),
-                    pitch_deg=45.0,
-                    duration_ms=max(250, decision.duration_ms // 2),
+                    name=decision.gesture,
+                    intensity=decision.intensity,
                 ).encode()
             )
 
@@ -3405,6 +3400,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         # the legacy queue-delay compensation must be disabled.
                         echo.set_delay_ms(0)
                     pipeline.memory_enabled = not bool(command.payload.get("test_session", False))
+                    language_mode = str(command.payload.get("language", "auto")).casefold()
+                    if language_mode not in {"auto", "en", "ja"}:
+                        language_mode = "auto"
+                    if isinstance(stt, BilingualWhisperSTT):
+                        stt.set_language_mode(language_mode)
+                    if language_mode in {"en", "ja"}:
+                        preferred_language = language_mode
                     public_info = dict(command.payload)
                     public_info.pop("auth_response", None)
                     public_info.pop("device_nonce", None)
@@ -3490,6 +3492,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     turn_detector.reset()
                 elif command.type == "ping":
                     await send_text(control("pong", **command.payload).encode())
+                elif command.type == "settings.update":
+                    requested_language = str(command.payload.get("language", "auto")).casefold()
+                    if requested_language not in {"auto", "en", "ja"}:
+                        await send_text(
+                            control("error", code="invalid_language_setting").encode()
+                        )
+                        continue
+                    language_mode = requested_language
+                    if isinstance(stt, BilingualWhisperSTT):
+                        stt.set_language_mode(language_mode)
+                    if language_mode in {"en", "ja"}:
+                        preferred_language = language_mode
+                    await send_text(
+                        control("settings.state", language=language_mode).encode()
+                    )
                 elif command.type == "sensor.head" and conversation_suspended:
                     if device_id:
                         results_for(device_id).append(

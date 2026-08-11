@@ -88,6 +88,7 @@ stackchan::CodexAgentState last_codex_motion_state =
 String held_face_state = "idle";
 String held_face_emotion = "neutral";
 float held_face_intensity = 0.5f;
+String language_mode = "auto";
 
 constexpr uint32_t kHeadSensorPlaybackGuardMs = 500;
 constexpr uint32_t kHeadSensorMotionGuardMs = 1000;
@@ -147,12 +148,26 @@ constexpr RoutineMotionStep kFocusMotion[] = {
     {0.0f, 45.0f, 450}, {-5.0f, 40.0f, 360}, {0.0f, 40.0f, 450}};
 constexpr RoutineMotionStep kGoodNightMotion[] = {
     {8.0f, 50.0f, 450}, {-8.0f, 56.0f, 450}, {0.0f, 60.0f, 520}};
+constexpr RoutineMotionStep kNodMotion[] = {
+    {0.0f, 58.0f, 300}, {0.0f, 45.0f, 300}};
+constexpr RoutineMotionStep kDoubleNodMotion[] = {
+    {0.0f, 57.0f, 250}, {0.0f, 40.0f, 230},
+    {0.0f, 57.0f, 250}, {0.0f, 45.0f, 300}};
+constexpr RoutineMotionStep kShakeNoMotion[] = {
+    {-18.0f, 45.0f, 280}, {18.0f, 45.0f, 320},
+    {-12.0f, 45.0f, 260}, {0.0f, 45.0f, 300}};
+constexpr RoutineMotionStep kBowMotion[] = {
+    {0.0f, 70.0f, 500}, {0.0f, 45.0f, 520}};
+constexpr RoutineMotionStep kAttentiveMotion[] = {
+    {10.0f, 38.0f, 360}, {4.0f, 42.0f, 420}, {0.0f, 45.0f, 340}};
 
 const RoutineMotionStep* active_routine_steps = nullptr;
 size_t active_routine_step_count = 0;
 size_t active_routine_step_index = 0;
 String active_routine_name;
 String active_routine_request_id;
+String active_sequence_tool = "play_routine";
+float active_sequence_intensity = 1.0f;
 String active_motion_request_id;
 bool active_routine_light_written = true;
 
@@ -175,6 +190,32 @@ uint32_t incrementPersistentBootCount() {
   preferences.putUInt("boot_count", current);
   preferences.end();
   return current;
+}
+
+String loadLanguageMode() {
+  Preferences preferences;
+  if (!preferences.begin("stackchan-ui", true)) return "auto";
+  String mode = preferences.getString("language", "auto");
+  preferences.end();
+  if (mode != "auto" && mode != "en" && mode != "ja") mode = "auto";
+  return mode;
+}
+
+void saveLanguageMode(const String& mode) {
+  Preferences preferences;
+  if (!preferences.begin("stackchan-ui", false)) return;
+  preferences.putString("language", mode);
+  preferences.end();
+}
+
+void sendLanguageSetting() {
+  if (!server_connected) return;
+  JsonDocument document;
+  document["type"] = "settings.update";
+  document["payload"]["language"] = language_mode;
+  String output;
+  serializeJson(document, output);
+  socket_client.sendTXT(output);
 }
 
 const char* resetReasonName(esp_reset_reason_t reason) {
@@ -313,6 +354,7 @@ void sendAuthenticatedHello(const String& server_nonce) {
   hello["payload"]["input_sample_rate"] = 16000;
   hello["payload"]["output_sample_rate"] = 24000;
   hello["payload"]["turn_detection"] = "auto";
+  hello["payload"]["language"] = language_mode;
   hello["payload"]["boot_count"] = boot_count;
   hello["payload"]["reset_reason"] = resetReasonName(esp_reset_reason());
   hello["payload"]["free_heap_bytes"] = ESP.getFreeHeap();
@@ -525,8 +567,12 @@ void sendRoutineMotionResult(const char* stage, bool success, const char* detail
   document["type"] = "tool.result";
   if (!active_routine_request_id.isEmpty())
     document["request_id"] = active_routine_request_id;
-  document["payload"]["tool"] = "play_routine";
-  document["payload"]["routine"] = active_routine_name;
+  document["payload"]["tool"] = active_sequence_tool;
+  if (active_sequence_tool == "perform_gesture") {
+    document["payload"]["gesture"] = active_routine_name;
+  } else {
+    document["payload"]["routine"] = active_routine_name;
+  }
   document["payload"]["stage"] = stage;
   document["payload"]["success"] = success;
   document["payload"]["detail"] = detail;
@@ -551,24 +597,49 @@ bool dispatchRoutineMotionStep() {
     return false;
   }
   const auto& step = active_routine_steps[active_routine_step_index];
-  return motion.move(true, step.yaw_deg, true, step.pitch_deg, step.duration_ms);
+  const float yaw = step.yaw_deg * active_sequence_intensity;
+  const float pitch =
+      45.0f + (step.pitch_deg - 45.0f) * active_sequence_intensity;
+  return motion.move(true, yaw, true, pitch, step.duration_ms);
 }
 
-bool startRoutineMotion(const String& routine, const String& request_id) {
+bool startRoutineMotion(const String& routine, const String& request_id,
+                        float intensity = 1.0f,
+                        const char* tool_name = "play_routine") {
   if (motion.active() || active_routine_steps != nullptr) {
     const String previous_routine = active_routine_name;
     const String previous_request_id = active_routine_request_id;
+    const String previous_tool = active_sequence_tool;
     active_routine_name = routine;
     active_routine_request_id = request_id;
+    active_sequence_tool = tool_name;
     sendRoutineMotionResult("rejected", false, "another motion is already active");
     active_routine_name = previous_routine;
     active_routine_request_id = previous_request_id;
+    active_sequence_tool = previous_tool;
     return false;
   }
   active_routine_name = routine;
   active_routine_request_id = request_id;
+  active_sequence_tool = tool_name;
+  active_sequence_intensity = constrain(intensity, 0.2f, 1.0f);
   active_routine_light_written = true;
-  if (routine == "celebrate") {
+  if (routine == "nod") {
+    active_routine_steps = kNodMotion;
+    active_routine_step_count = std::size(kNodMotion);
+  } else if (routine == "double_nod") {
+    active_routine_steps = kDoubleNodMotion;
+    active_routine_step_count = std::size(kDoubleNodMotion);
+  } else if (routine == "shake_no") {
+    active_routine_steps = kShakeNoMotion;
+    active_routine_step_count = std::size(kShakeNoMotion);
+  } else if (routine == "bow") {
+    active_routine_steps = kBowMotion;
+    active_routine_step_count = std::size(kBowMotion);
+  } else if (routine == "attentive") {
+    active_routine_steps = kAttentiveMotion;
+    active_routine_step_count = std::size(kAttentiveMotion);
+  } else if (routine == "celebrate") {
     active_routine_steps = kCelebrateMotion;
     active_routine_step_count = std::size(kCelebrateMotion);
   } else if (routine == "curious") {
@@ -753,13 +824,56 @@ void handleControl(const uint8_t* payload, size_t length) {
     stackchan::MotionDiagnostic diagnostic;
     motion.diagnose(diagnostic);
     sendMotionDiagnostic(diagnostic, request_id);
+  } else if (type == "gesture.play") {
+    const String gesture = body["name"] | "nod";
+    const float intensity = constrain(body["intensity"] | 0.7f, 0.35f, 1.0f);
+    const bool valid_gesture =
+        gesture == "nod" || gesture == "double_nod" ||
+        gesture == "shake_no" || gesture == "bow" || gesture == "attentive";
+    if (!valid_gesture) {
+      active_routine_name = gesture;
+      active_routine_request_id = request_id;
+      active_sequence_tool = "perform_gesture";
+      active_routine_step_count = 0;
+      sendRoutineMotionResult("rejected", false, "gesture is not allowlisted");
+      active_routine_request_id = "";
+      return;
+    }
+    if (motion.active() || active_routine_steps != nullptr) {
+      startRoutineMotion(gesture, request_id, intensity, "perform_gesture");
+      return;
+    }
+    const bool light_written = lights.set(
+        gesture == "shake_no" ? 255 : 80,
+        gesture == "shake_no" ? 90 : 170,
+        gesture == "shake_no" ? 70 : 255,
+        0.08f + 0.10f * intensity, stackchan::LightAnimation::pulse);
+    if (!light_written) {
+      active_routine_name = gesture;
+      active_routine_request_id = request_id;
+      active_sequence_tool = "perform_gesture";
+      active_routine_step_count = 0;
+      sendRoutineMotionResult("rejected", false,
+                              "LED preflight failed; gesture was not started");
+      active_routine_request_id = "";
+      lights.off();
+      return;
+    }
+    if (startRoutineMotion(gesture, request_id, intensity, "perform_gesture")) {
+      active_routine_light_written = light_written;
+      face.setEmotion(gesture == "shake_no" ? "worried" : "curious",
+                      0.45f + 0.35f * intensity);
+    } else {
+      lights.off();
+    }
   } else if (type == "routine.play") {
     const String routine = body["name"] | "greet";
+    const float intensity = constrain(body["intensity"] | 0.7f, 0.2f, 1.0f);
     // Reject contention before touching visual state. Then prove the first LED
     // frame can be written before motion starts; a dispatch failure rolls the
     // LEDs back off and never changes the face.
     if (motion.active() || active_routine_steps != nullptr) {
-      startRoutineMotion(routine, request_id);
+      startRoutineMotion(routine, request_id, intensity);
       return;
     }
     bool light_written = false;
@@ -798,7 +912,7 @@ void handleControl(const uint8_t* payload, size_t length) {
       lights.off();
       return;
     }
-    if (startRoutineMotion(routine, request_id)) {
+    if (startRoutineMotion(routine, request_id, intensity)) {
       active_routine_light_written = light_written;
       if (routine == "celebrate") {
         face.setState(stackchan::FaceState::happy);
@@ -989,6 +1103,27 @@ void exitCodexMode() {
 
 void handleTouch(uint32_t now_ms) {
   const auto& detail = M5.Touch.getDetail(0);
+  if (face.settingsMode()) {
+    const bool finished = detail.wasFlicked() || detail.wasDragged() || detail.wasReleased();
+    if (finished && detail.distanceX() < -40 &&
+        abs(detail.distanceX()) * 2 > abs(detail.distanceY()) * 3) {
+      face.setSettingsMode(false);
+      return;
+    }
+    if (detail.wasReleased() && abs(detail.distanceX()) < 18 &&
+        abs(detail.distanceY()) < 18 && detail.x >= 38 && detail.x <= 282 &&
+        detail.y >= 76 && detail.y < 232) {
+      const int index = constrain((detail.y - 76) / 52, 0, 2);
+      const char* modes[] = {"auto", "en", "ja"};
+      language_mode = modes[index];
+      saveLanguageMode(language_mode);
+      face.setLanguageMode(language_mode);
+      sendLanguageSetting();
+      audio.playUiSound(stackchan::UiSoundEffect::agent_select,
+                        static_cast<uint8_t>(index));
+    }
+    return;
+  }
   if (face.codexMode()) {
     const auto state = codex.agent(codex.selectedAgent()).state();
     const bool mic_region = detail.y >= 181 &&
@@ -1023,6 +1158,10 @@ void handleTouch(uint32_t now_ms) {
                   detail.distanceY(), face.codexMode());
     if (!face.codexMode() && detail.distanceX() < 0) {
       enterCodexMode();
+      return;
+    }
+    if (!face.codexMode() && detail.distanceX() > 0) {
+      face.setSettingsMode(true);
       return;
     }
     if (face.codexMode() && detail.distanceX() > 0) {
@@ -1270,10 +1409,12 @@ void setup() {
   M5.begin(config);
   M5.Touch.setFlickThresh(24);
   boot_count = incrementPersistentBootCount();
+  language_mode = loadLanguageMode();
   Serial.printf("boot: persistent_count=%u reset=%s heap=%u\n", boot_count,
                 resetReasonName(esp_reset_reason()), ESP.getFreeHeap());
   M5.Display.setBrightness(128);
   face.begin();
+  face.setLanguageMode(language_mode);
   face.setCodexIndicatorAnimation(STACKCHAN_CODEX_INDICATOR_ANIMATION != 0,
                                   STACKCHAN_CODEX_INDICATOR_PULSE_MS);
   face.setState(stackchan::FaceState::booting);

@@ -12,6 +12,7 @@ function params(
     "remember",
     "forget_memory",
     "move_head",
+    "perform_gesture",
     "recall_memory",
     "device_status",
     "create_schedule",
@@ -44,6 +45,7 @@ function toolLoopParams(
 ): LanguageModelV4CallOptions {
   const tools = [
     "move_head",
+    "perform_gesture",
     "set_lights",
     "play_routine",
     "capture_photo",
@@ -177,6 +179,30 @@ test("direct natural read and exact delete requests select one bounded tool", as
       [expected],
     );
     assert.deepEqual(transformed.toolChoice, { type: "tool", toolName: expected });
+  }
+});
+
+test("direct bilingual gesture requests expose only perform_gesture", async () => {
+  for (const transcript of [
+    "Please nod.",
+    "Could you shake your head no?",
+    "Please bow.",
+    "うなずいてください。",
+    "首を横に振ってください。",
+  ]) {
+    const transformed = await authorizedToolMiddleware().transformParams!({
+      type: "stream",
+      params: params(transcript),
+      model: {} as never,
+    });
+    assert.deepEqual(
+      transformed.tools?.map((tool) => (tool.type === "function" ? tool.name : "")),
+      ["perform_gesture"],
+    );
+    assert.deepEqual(transformed.toolChoice, {
+      type: "tool",
+      toolName: "perform_gesture",
+    });
   }
 });
 

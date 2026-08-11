@@ -212,6 +212,22 @@ async def test_bilingual_router_selects_large_japanese_decode_without_small() ->
 
 
 @pytest.mark.asyncio
+async def test_bilingual_router_honors_explicit_language_mode() -> None:
+    fast = StubSTT(("hello", "en"))
+    japanese = StubSTT(("こんにちは", "ja"))
+    router = BilingualWhisperSTT(fast, japanese)
+
+    router.set_language_mode("ja")
+    assert await router.transcribe(b"audio", 16_000) == ("こんにちは", "ja")
+    assert router.last_route["route"] == "forced_japanese"
+    assert not fast.called
+
+    router.set_language_mode("en")
+    assert await router.transcribe(b"audio", 16_000) == ("hello", "en")
+    assert router.last_route["route"] == "forced_english"
+
+
+@pytest.mark.asyncio
 async def test_bilingual_router_accepts_confident_small_japanese_result() -> None:
     fast = StubSTT(("短い冗談", "ja"))
     small = StubConfidenceSTT("短いジョーク", -0.1)

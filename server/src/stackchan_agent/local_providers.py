@@ -339,6 +339,10 @@ class BilingualWhisperSTT(STTProvider):
         self.last_route: dict[str, str | float | bool | None] = {}
         self.last_language = "en"
         self._robust_next_language: str | None = None
+        self.language_mode = "auto"
+
+    def set_language_mode(self, mode: str) -> None:
+        self.language_mode = mode if mode in {"auto", "en", "ja"} else "auto"
 
     def prefer_robust_next_turn(self, language: str) -> None:
         """Route the noisy turn following a physical interruption to a larger ASR."""
@@ -378,6 +382,21 @@ class BilingualWhisperSTT(STTProvider):
         return chosen.text, "en"
 
     async def transcribe(self, pcm16: bytes, sample_rate: int) -> tuple[str, str]:
+        if self.language_mode == "en":
+            text, _ = await self.fast.transcribe(pcm16, sample_rate)
+            self.last_route = {"route": "forced_english", "fallback": False}
+            self.last_language = "en"
+            return text, "en"
+        if self.language_mode == "ja":
+            provider = self.japanese_fast or self.japanese
+            if hasattr(provider, "transcribe_detailed"):
+                result = await provider.transcribe_detailed(pcm16, sample_rate)
+                text = result.text
+            else:
+                text, _ = await provider.transcribe(pcm16, sample_rate)
+            self.last_route = {"route": "forced_japanese", "fallback": False}
+            self.last_language = "ja"
+            return text, "ja"
         robust_language = self._robust_next_language
         self._robust_next_language = None
         if robust_language == "en":

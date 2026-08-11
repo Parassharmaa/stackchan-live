@@ -106,6 +106,13 @@ void FaceRenderer::setCodexMode(bool enabled) {
   last_frame_ms_ = 0;
 }
 
+void FaceRenderer::setSettingsMode(bool enabled) {
+  if (settings_mode_ == enabled) return;
+  settings_mode_ = enabled;
+  displayed_asset_index_ = -1;
+  last_frame_ms_ = 0;
+}
+
 void FaceRenderer::setCodexSelectedAgent(uint8_t index) {
   if (index < codex_agent_states_.size()) codex_selected_agent_ = index;
 }
@@ -163,6 +170,10 @@ void FaceRenderer::renderAsset(int index, const uint8_t* data, size_t length) {
 }
 
 void FaceRenderer::draw(uint32_t now_ms) {
+  if (settings_mode_) {
+    drawSettings();
+    return;
+  }
   if (codex_mode_) {
     drawCodex(now_ms);
     return;
@@ -228,6 +239,31 @@ void FaceRenderer::draw(uint32_t now_ms) {
     renderAsset(target.index, target.data, target.length);
   }
   drawFaceHud(now_ms);
+}
+
+void FaceRenderer::drawSettings() {
+  auto color565 = [&](uint32_t color) {
+    return canvas_.color565((color >> 16) & 0xFF, (color >> 8) & 0xFF,
+                            color & 0xFF);
+  };
+  canvas_.fillScreen(color565(kCodexBackground));
+  canvas_.fillCircle(286, 26, 72, color565(0x251F36));
+  canvas_.setTextDatum(textdatum_t::middle_center);
+  canvas_.setTextColor(color565(kCodexText));
+  canvas_.setTextSize(2);
+  canvas_.drawString("Language", 160, 42);
+  const char* modes[] = {"AUTO", "EN", "JP"};
+  const char* values[] = {"auto", "en", "ja"};
+  for (int index = 0; index < 3; ++index) {
+    const int y = 76 + index * 52;
+    const bool selected = language_mode_ == values[index];
+    canvas_.fillRoundRect(38, y, 244, 42, 14,
+                          color565(selected ? kCodexAccent : kCodexPanel));
+    canvas_.setTextColor(color565(selected ? 0x11121A : kCodexText));
+    canvas_.drawString(modes[index], 160, y + 21);
+    if (selected) canvas_.fillCircle(257, y + 21, 5, color565(0xFFFFFF));
+  }
+  canvas_.pushSprite(0, 0);
 }
 
 void FaceRenderer::drawFaceHud(uint32_t now_ms) {

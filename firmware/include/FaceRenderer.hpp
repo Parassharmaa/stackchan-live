@@ -30,6 +30,9 @@ class FaceRenderer {
   void setStatus(const String& status);
   void setCodexMode(bool enabled);
   bool codexMode() const { return codex_mode_; }
+  void setSettingsMode(bool enabled);
+  bool settingsMode() const { return settings_mode_; }
+  void setLanguageMode(const String& mode) { language_mode_ = mode; }
   void setCodexSelectedAgent(uint8_t index);
   void setCodexAgentState(uint8_t index, CodexAgentState state, uint32_t color,
                           uint8_t effect, float speed);
@@ -48,6 +51,7 @@ class FaceRenderer {
  private:
   void draw(uint32_t now_ms);
   void drawCodex(uint32_t now_ms);
+  void drawSettings();
   void drawFaceHud(uint32_t now_ms);
   void renderAsset(int index, const uint8_t* data, size_t length);
 
@@ -78,6 +82,8 @@ class FaceRenderer {
   uint32_t last_battery_read_ms_ = 0;
   int battery_level_ = 0;
   bool codex_mode_ = false;
+  bool settings_mode_ = false;
+  String language_mode_ = "auto";
   uint8_t codex_selected_agent_ = 0;
   std::array<CodexAgentState, 6> codex_agent_states_{};
   std::array<uint32_t, 6> codex_agent_colors_{};

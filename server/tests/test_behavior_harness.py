@@ -36,6 +36,7 @@ def test_memory_behavior_does_not_reward_a_silent_wake_reply() -> None:
 def test_embodied_behavior_does_not_reward_a_silent_state_reply() -> None:
     result = MODULE.judge_embodied_behavior(
         {"response": ""},
+        {"response": "That movement did not happen; I can retry shortly."},
         {"response": "Would you like me to take one photo?"},
         [],
         ["move_head", "capture_photo"],

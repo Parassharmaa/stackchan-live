@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 from stackchan_agent.config import Settings
 from stackchan_agent.maai_runtime import MaaiBehaviorArbiter, MaaiRuntime, _probability
@@ -38,7 +39,8 @@ def test_arbiter_emits_sparse_japanese_nod_and_respects_cooldown() -> None:
     )
     assert first is not None
     assert first.behavior == "nod_long"
-    assert first.pitch_deg == 57.0
+    assert first.gesture == "double_nod"
+    assert first.intensity == 0.68
     assert (
         arbiter.decide(
             result,
@@ -83,6 +85,30 @@ def test_arbiter_suppresses_backchannel_during_robot_speech_or_codex_mode() -> N
             now=10.0,
         )
         assert decision is None
+
+
+def test_english_backchannel_uses_the_shared_attentive_gesture() -> None:
+    decision = MaaiBehaviorArbiter(settings()).decide(
+        {"backchannel_en": {"p_bc": [0.91]}},
+        language="en",
+        user_speaking=True,
+        robot_speaking=False,
+        conversation_suspended=False,
+        motion_busy=False,
+        now=10.0,
+    )
+    assert decision is not None
+    assert decision.gesture == "attentive"
+    assert decision.intensity == 0.5
+
+
+def test_live_maai_dispatch_uses_semantic_gesture_protocol() -> None:
+    app_source = (
+        Path(__file__).resolve().parents[1] / "src/stackchan_agent/app.py"
+    ).read_text(encoding="utf-8")
+    assert '"gesture.play"' in app_source
+    assert "name=decision.gesture" in app_source
+    assert "pitch_deg=decision" not in app_source
 
 
 def test_runtime_drops_stale_audio_instead_of_growing_latency() -> None:

@@ -30,6 +30,11 @@ class MotionArgs(BaseModel):
     duration_ms: int = Field(default=450, ge=200, le=1_500)
 
 
+class GestureArgs(BaseModel):
+    name: Literal["nod", "double_nod", "shake_no", "bow", "attentive"]
+    intensity: float = Field(default=0.7, ge=0.35, le=1)
+
+
 class LightArgs(BaseModel):
     red: int = Field(ge=0, le=255)
     green: int = Field(ge=0, le=255)
@@ -82,6 +87,11 @@ async def _motion(args: BaseModel) -> ControlMessage:
     return control("motion.set", **parsed.model_dump())
 
 
+async def _gesture(args: BaseModel) -> ControlMessage:
+    parsed = GestureArgs.model_validate(args)
+    return control("gesture.play", **parsed.model_dump())
+
+
 async def _lights(args: BaseModel) -> ControlMessage:
     parsed = LightArgs.model_validate(args)
     return control("lights.set", **parsed.model_dump())
@@ -100,6 +110,15 @@ async def _capture_photo(args: BaseModel) -> ControlMessage:
 TOOLS: dict[str, Tool] = {
     "set_face": Tool("set_face", "Set semantic face state and emotion.", FaceArgs, _face),
     "move_head": Tool("move_head", "Move head within enforced safety limits.", MotionArgs, _motion),
+    "perform_gesture": Tool(
+        "perform_gesture",
+        (
+            "Perform one bounded semantic head gesture: nod, double nod, no-shake, "
+            "bow, or attentive tilt. Prefer this to composing raw head positions."
+        ),
+        GestureArgs,
+        _gesture,
+    ),
     "set_lights": Tool("set_lights", "Set body RGB color and animation.", LightArgs, _lights),
     "play_routine": Tool(
         "play_routine",
@@ -362,6 +381,61 @@ def plan_tools(
                 ),
             )
         )
+
+    gesture_patterns: tuple[tuple[str, tuple[str, ...]], ...] = (
+        (
+            "double_nod",
+            (
+                r"^(?:please\s+)?(?:can|could|would|will)?\s*(?:you\s+)?"
+                r"(?:please\s+)?(?:double[ -]?nod|nod twice)\b",
+                r"(?:二回|二度)(?:うなずいて|頷いて)(?:ください|下さい)?[。！？\s]*$",
+            ),
+        ),
+        (
+            "shake_no",
+            (
+                r"^(?:please\s+)?(?:can|could|would|will)?\s*(?:you\s+)?(?:please\s+)?shake\s+(?:your\s+)?head(?:\s+no)?\b",
+                r"首を横に振って(?:ください|下さい)?[。！？\s]*$",
+            ),
+        ),
+        (
+            "bow",
+            (
+                r"^(?:please\s+)?(?:can|could|would|will)?\s*(?:you\s+)?(?:please\s+)?bow\b",
+                r"お辞儀して(?:ください|下さい)?[。！？\s]*$",
+            ),
+        ),
+        (
+            "attentive",
+            (
+                r"^(?:please\s+)?(?:can|could|would|will)?\s*(?:you\s+)?"
+                r"(?:please\s+)?(?:look attentive|show (?:me )?(?:an )?"
+                r"attentive gesture)\b",
+                r"(?:聞いてる|聞いている|傾聴の)仕草(?:を)?して(?:ください|下さい)?[。！？\s]*$",
+            ),
+        ),
+        (
+            "nod",
+            (
+                r"^(?:please\s+)?(?:can|could|would|will)?\s*(?:you\s+)?(?:please\s+)?nod(?:\s+(?:your\s+)?head)?\b",
+                r"(?:うなずいて|頷いて)(?:ください|下さい)?[。！？\s]*$",
+            ),
+        ),
+    )
+    for gesture, patterns in gesture_patterns:
+        if any(re.search(pattern, text) for pattern in patterns):
+            plans.append(
+                PlannedTool(
+                    "perform_gesture",
+                    {"name": gesture, "intensity": 0.7},
+                    (
+                        f"{gesture}のジェスチャーが完了しました"
+                        if is_japanese
+                        else f"the {gesture} gesture physically completed"
+                    ),
+                )
+            )
+            break
 
     face_emotions = (
         (

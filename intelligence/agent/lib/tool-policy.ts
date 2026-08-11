@@ -46,6 +46,17 @@ const SAFE_FORCED_TOOL_RULES: readonly {
     matches: (transcript) => explicitToolCommand(transcript, "move_head"),
   },
   {
+    name: "perform_gesture",
+    matches: (transcript) =>
+      explicitToolCommand(transcript, "perform_gesture") ||
+      /^(?:please\s+)?(?:can|could|would|will)?\s*(?:you\s+)?(?:please\s+)?(?:nod|double[ -]?nod|bow|shake\s+(?:your\s+)?head|look attentive)\b/i.test(
+        transcript,
+      ) ||
+      /(?:うなずいて|頷いて|二回うなずいて|二度うなずいて|首を横に振って|お辞儀して|聞いてる仕草して)(?:ください|下さい)?[。！？\s]*$/.test(
+        transcript,
+      ),
+  },
+  {
     name: "set_face",
     matches: (transcript) => explicitToolCommand(transcript, "set_face"),
   },

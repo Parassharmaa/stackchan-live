@@ -122,6 +122,33 @@ def _stable_profile_statement(text: str) -> bool:
     return not any(cue in normalized for cue in transient)
 
 
+def _is_low_value_episode(transcript: str, response: str, language: str) -> bool:
+    """Reject acknowledgements, noise captions, and circular memory chatter."""
+    user = unicodedata.normalize("NFKC", transcript).casefold().strip()
+    assistant = unicodedata.normalize("NFKC", response).casefold().strip()
+    if re.fullmatch(r"[\s\W_]*(?:\([^)]*\)|\[[^]]*\]|\*[^*]*\*)[\s\W_]*", user):
+        return True
+    filler = {
+        "thanks", "thank you", "okay", "ok", "yes", "no", "sure", "hello", "hi",
+        "you're welcome", "you are welcome", "そうですね", "ありがとう", "はい", "うん",
+        "わかりました", "了解", "こんにちは", "スタックちゃん", "すたっくちゃん",
+    }
+    normalized_user = re.sub(r"[\s,，.。!！?？、]+", " ", user).strip()
+    normalized_assistant = re.sub(r"[\s,，.。!！?？、]+", " ", assistant).strip()
+    if normalized_user in filler or normalized_assistant in filler:
+        return True
+    memory_chatter = (
+        "your favorite", "you remember", "remembered conversation", "memory", "favorite drink",
+        "あなたが覚え", "覚えてくれた", "会話記録", "好きな飲み物", "記憶",
+    )
+    if any(cue in assistant for cue in memory_chatter):
+        return True
+    minimum_words = 4 if language != "ja" else 1
+    if language != "ja" and len(re.findall(r"[a-z0-9]+", user)) < minimum_words:
+        return True
+    return False
+
+
 def extract_profile_memories(
     transcript: str, language: str
 ) -> list[ProfileMemoryCandidate]:
@@ -198,7 +225,10 @@ def extract_profile_memories(
         if preference:
             value = _clean_profile_value(preference.group(1))
             sentiment = preference.group(2)
-            if value and value not in vague:
+            excluded_subjects = {
+                "あなた", "君", "きみ", "スタックちゃん", "すたっくちゃん", "stack-chan"
+            }
+            if value and value not in vague and value not in excluded_subjects:
                 positive = sentiment in {"好き", "大好き"}
                 candidates.append(
                     ProfileMemoryCandidate(
@@ -672,6 +702,7 @@ class MemoryStore:
         if (
             len(transcript.strip()) < minimum_length
             or len(response.strip()) < minimum_length
+            or _is_low_value_episode(transcript, response, language)
             or memory_recall
             or any(cue in normalized for cue in command_cues)
         ):
