@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import runpy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -102,7 +103,7 @@ def test_touch_ui_maps_agents_actions_and_contextual_approval() -> None:
     assert "codex.selectAgent" in main
     assert "isCodexControlRelease(" in main
     assert 'Serial.printf("codex-ui: control release' in main
-    assert "constrain(x / 50, 0, 5)" in main
+    assert "codexControlAt(detail.x, detail.y)" in main
     assert "detail.wasFlicked() || detail.wasDragged() || detail.wasReleased()" in main
     assert "abs(detail.distanceX()) >= 40" in main
     assert "M5.Touch.setFlickThresh(24)" in main
@@ -113,15 +114,47 @@ def test_touch_ui_maps_agents_actions_and_contextual_approval() -> None:
     assert "motion.move(true, yaw, true, pitch" in main
     assert "last_codex_motion_agent" not in main
     assert "drawCodexLauncher" not in face
-    assert 'drawCircle(82, 181, 20' in face
-    assert 'drawCircle(238, 181, 20' in face
-    assert 'fillRoundRect(8, 184, 304, 48' in face
+    assert "drawCodexReference(now_ms);" in face
+    assert 'key(11, 94, 164, 124, 62' in face
+    assert 'key(12, 226, 164, 58, 62' in face
     assert '"PLAN"' not in face
     for label in ('"FAST"', '"NEW"', '"FORK"', '"STEER"', '"ARCHIVE"'):
         assert label not in face
     assert '"CODEX CONTROL"' not in face
     assert '"VOICE PAUSED"' not in face
     assert 'drawString("<"' not in face
+
+
+def test_reference_controller_layout_and_hit_targets_stay_pixel_aligned() -> None:
+    main = MAIN_SOURCE.read_text()
+    face = FACE_SOURCE.read_text()
+    renderer = runpy.run_path(str(ROOT / "scripts/render_codex_ui.py"))
+
+    image = renderer["render"](1)
+    assert image.size == (320, 240)
+    assert 'constexpr int column_x[4] = {28, 94, 160, 226};' in face
+    assert 'constexpr int slot_x[6] = {94, 160, 28, 94, 160, 226};' in face
+    assert 'constexpr int slot_y[6] = {16, 16, 64, 64, 64, 64};' in face
+    assert 'constexpr int slot_x[6] = {94, 160, 28, 94, 160, 226};' in main
+    assert 'constexpr int slot_y[6] = {16, 16, 64, 64, 64, 64};' in main
+    assert 'if (x >= 94 && x < 218) return 11;' in main
+    assert 'if (x >= 226 && x < 284) return 12;' in main
+
+
+def test_codex_heartbeat_is_measured_corrected_and_reported() -> None:
+    main = MAIN_SOURCE.read_text()
+    face = FACE_SOURCE.read_text()
+    header = FACE_HEADER.read_text()
+
+    assert "kCodexHeartbeatPeriodMs = 900" in face
+    assert "now_ms / kCodexHeartbeatPeriodMs" in face
+    assert "codex_heartbeat_drift_ms_" in face
+    assert "interval > kCodexHeartbeatPeriodMs + 120" in face
+    assert 'heartbeat["payload"]["component"] = "codex_ui_heartbeat";' in main
+    assert 'heartbeat["payload"]["target_interval_ms"] = 900;' in main
+    assert 'heartbeat["payload"]["healthy"]' in main
+    assert "codexHeartbeatIntervalMs()" in header
+    assert "codexHeartbeatMisses()" in header
 
 
 def test_right_swipe_settings_persists_and_syncs_language_mode() -> None:
@@ -169,14 +202,14 @@ def test_codex_center_panel_is_minimal_without_title_or_status_overlay() -> None
     main = MAIN_SOURCE.read_text()
     face = FACE_SOURCE.read_text()
     header = FACE_HEADER.read_text()
-    assert "codexAgentStateName(selected_state)" in face
+    assert "drawCodexReference(now_ms)" in face
     assert "codex_agent_titles_" not in header
     assert "codex_agent_titles_" not in face
     assert "TASK STATUS" not in face
     assert "list_checks_20" not in face
     assert "setCodexStatusOpen" not in header
     assert "codexStatusOpen" not in main
-    assert "detail.y >= 181" in main
+    assert "pressed_control == 11" in main
 
 
 def test_avatar_hud_shows_ntp_time_and_live_battery_level() -> None:
@@ -201,8 +234,8 @@ def test_codex_indicator_animation_is_static_by_default_and_host_controlled() ->
     local_config = (ROOT / "firmware/include/LocalConfig.example.hpp").read_text()
     assert "STACKCHAN_CODEX_INDICATOR_ANIMATION 0" in local_config
     assert "setCodexIndicatorAnimation" in header
-    assert "codex_indicator_animation_ && codex_agent_effects_[index] != 0" in face
-    assert "codex_agent_speeds_[index]" in face
+    assert "codex_indicator_animation_ && codex_agent_effects_[index] != 0" not in face
+    assert "kCodexHeartbeatPeriodMs = 900" in face
     assert "agent.effect" in main
     assert "agent.speed" in main
 
@@ -312,7 +345,7 @@ def test_archive_is_a_confirmed_native_keyboard_shortcut() -> None:
     assert "codex.archiveThread()" in main
     assert "codex_archive_armed_until_ms = now_ms + 2500" in main
     assert "codex_archive_armed_" in face
-    assert "fill = 0x543716" in face
+    assert "codex_archive_armed_ ? 0x543716 : 0x181920" in face
 
 
 def test_new_chat_uses_native_shortcut_and_queued_steer_uses_micro_action() -> None:

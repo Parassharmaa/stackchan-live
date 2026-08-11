@@ -21,6 +21,7 @@ constexpr uint32_t kCodexPanel = 0x1D2030;
 constexpr uint32_t kCodexText = 0xF7F4EE;
 constexpr uint32_t kCodexMuted = 0x8E94A8;
 constexpr uint32_t kCodexAccent = 0xFF6B9A;
+constexpr uint32_t kCodexHeartbeatPeriodMs = 900;
 
 struct Asset {
   int index;
@@ -298,6 +299,11 @@ void FaceRenderer::drawFaceHud(uint32_t now_ms) {
 }
 
 void FaceRenderer::drawCodex(uint32_t now_ms) {
+  drawCodexReference(now_ms);
+  return;
+}
+
+void FaceRenderer::drawCodexReference(uint32_t now_ms) {
   auto color565 = [&](uint32_t color) {
     return canvas_.color565((color >> 16) & 0xFF, (color >> 8) & 0xFF,
                             color & 0xFF);
@@ -316,168 +322,149 @@ void FaceRenderer::drawCodex(uint32_t now_ms) {
     return 0x353848;
   };
 
-  canvas_.fillScreen(color565(kCodexBackground));
-  // Low-cost depth cues keep the controller readable without spending the
-  // frame budget on a full gradient while audio and BLE continue streaming.
-  canvas_.drawCircle(28, 212, 86, color565(0x20243A));
-  canvas_.drawCircle(292, 84, 74, color565(0x251F36));
-  canvas_.setTextDatum(textdatum_t::middle_center);
-  canvas_.setTextSize(1);
+  const uint32_t cycle = now_ms / kCodexHeartbeatPeriodMs;
+  if (cycle != codex_heartbeat_cycle_) {
+    if (codex_heartbeat_last_ms_ != 0) {
+      const uint32_t interval = now_ms - codex_heartbeat_last_ms_;
+      codex_heartbeat_interval_ms_ = static_cast<uint16_t>(min(interval, 65535U));
+      const uint32_t drift = interval > kCodexHeartbeatPeriodMs
+                                 ? interval - kCodexHeartbeatPeriodMs
+                                 : kCodexHeartbeatPeriodMs - interval;
+      codex_heartbeat_drift_ms_ = static_cast<uint16_t>(min(drift, 65535U));
+      if (interval > kCodexHeartbeatPeriodMs + 120) ++codex_heartbeat_misses_;
+    }
+    codex_heartbeat_cycle_ = cycle;
+    codex_heartbeat_last_ms_ = now_ms;
+    ++codex_heartbeat_ticks_;
+  }
 
-  constexpr int agent_x[6] = {30, 82, 134, 186, 238, 290};
+  canvas_.fillScreen(color565(0x17181D));
+  canvas_.fillRoundRect(18, 7, 284, 226, 18, color565(0x0C0D12));
+  canvas_.drawRoundRect(18, 7, 284, 226, 18, color565(0x30323B));
+  canvas_.drawRoundRect(20, 9, 280, 222, 16, color565(0x22242D));
+
+  auto key = [&](int control, int x, int y, int width, int height,
+                 uint32_t fill, uint32_t border, bool selected = false) {
+    const int press = codex_pressed_control_ == control ? 2 : 0;
+    canvas_.fillRoundRect(x, y + 3, width, height, 13, color565(0x090A0E));
+    canvas_.fillRoundRect(x, y + press, width, height, 13, color565(border));
+    canvas_.fillRoundRect(x + 2, y + 2 + press, width - 4, height - 4, 11,
+                          color565(fill));
+    canvas_.drawFastHLine(x + 9, y + 3 + press, width - 18,
+                          color565(selected ? 0x8D97FF : 0x4A4D58));
+  };
+
+  constexpr int column_x[4] = {28, 94, 160, 226};
+  constexpr int slot_x[6] = {94, 160, 28, 94, 160, 226};
+  constexpr int slot_y[6] = {16, 16, 64, 64, 64, 64};
   for (uint8_t index = 0; index < 6; ++index) {
-    const uint32_t color = stateColor(index);
     const bool selected = index == codex_selected_agent_;
-    const bool pulse =
-        codex_indicator_animation_ && codex_agent_effects_[index] != 0 &&
-        (codex_agent_states_[index] == CodexAgentState::working ||
-         codex_agent_states_[index] == CodexAgentState::needs_input);
-    const int radius = selected ? 22 : 19;
-    if (pulse) {
-      const float host_speed = codex_agent_speeds_[index];
-      const uint32_t period_ms =
-          host_speed > 0.05f
-              ? constrain(static_cast<uint32_t>(1000.0f / host_speed), 240U, 2000U)
-              : codex_indicator_period_ms_;
-      const uint8_t phase = static_cast<uint8_t>((now_ms % period_ms) * 4 / period_ms);
-      const int halo = 23 + (phase <= 2 ? phase : 4 - phase);
-      canvas_.drawCircle(agent_x[index], 28, halo, color565(color));
+    const auto state = codex_agent_states_[index];
+    const uint32_t state_color = stateColor(index);
+    uint32_t fill = state == CodexAgentState::off ? 0x050608 : 0xB9BBC1;
+    uint32_t border = state == CodexAgentState::off ? 0x292B33 : 0xD7D8DC;
+    if (selected || state == CodexAgentState::working) {
+      fill = 0x4856B6;
+      border = 0x6975D6;
+    } else if (state == CodexAgentState::error) {
+      fill = 0x7A2B42;
+      border = 0xA14561;
+    } else if (state == CodexAgentState::needs_input) {
+      fill = 0x80612A;
+      border = 0xB78D42;
     }
-    canvas_.fillCircle(agent_x[index], 28, radius, color565(color));
-    canvas_.setTextColor(color565(color == 0xFFFFFF ? 0x11121A : 0xFFFFFF));
-    canvas_.setTextSize(selected ? 2 : 1);
-    canvas_.drawNumber(index + 1, agent_x[index], 28);
-    canvas_.setTextSize(1);
-    if (selected) {
-      canvas_.drawCircle(agent_x[index], 28, 25, color565(kCodexAccent));
+    key(index, slot_x[index], slot_y[index], 58, 42, fill, border, selected);
+    const uint16_t dot = color565(
+        state == CodexAgentState::off ? 0x111218
+                                     : (state_color == 0xFFFFFF ? 0x7B6CDC
+                                                               : state_color));
+    canvas_.fillCircle(slot_x[index] + 29, slot_y[index] + 21, 6, dot);
+    if (selected) canvas_.drawCircle(slot_x[index] + 29, slot_y[index] + 21, 8,
+                                     color565(0x9A91F0));
+  }
+
+  // The two corner controls mirror the reference hardware: a restrained
+  // status dial and a dark BLE connection well.
+  canvas_.fillCircle(57, 37, 25, color565(0x20222B));
+  canvas_.fillTriangle(34, 38, 57, 14, 72, 18, color565(0x30333D));
+  canvas_.drawCircle(57, 37, 25, color565(0x393C47));
+  canvas_.fillRoundRect(226, 16, 58, 42, 13, color565(0x292B32));
+  canvas_.fillCircle(255, 37, 16,
+                     color565(codex_agent_states_[codex_selected_agent_] ==
+                                      CodexAgentState::working
+                                  ? 0x161A2B
+                                  : 0x020304));
+
+  const uint16_t icon_ink = color565(kCodexText);
+  for (int index = 0; index < 4; ++index) {
+    uint32_t fill = 0x181920;
+    uint32_t border = 0x343640;
+    const bool steer_ready = index == 3 && codex_queued_followup_ &&
+                             codex_agent_states_[codex_selected_agent_] ==
+                                 CodexAgentState::working;
+    if (steer_ready) {
+      fill = 0x26355A;
+      border = 0x405B95;
+    }
+    key(6 + index, column_x[index], 112, 58, 46, fill, border);
+    if (index == 0) {
+      canvas_.drawBitmap(column_x[index] + 15, 121, codex_icons::lightning_28,
+                         28, 28, icon_ink);
+    } else if (index == 1) {
+      canvas_.drawBitmap(column_x[index] + 15, 121,
+                         codex_icons::chat_circle_dots_28, 28, 28, icon_ink);
+    } else if (index == 2) {
+      canvas_.drawBitmap(column_x[index] + 15, 121, codex_icons::git_fork_28,
+                         28, 28, icon_ink);
+    } else {
+      canvas_.drawBitmap(column_x[index] + 15, 121,
+                         codex_icons::arrow_bend_up_right_28, 28, 28,
+                         color565(steer_ready ? 0xA9C8FF : 0x777B87));
     }
   }
 
-  const CodexAgentState selected_state = codex_agent_states_[codex_selected_agent_];
-  const uint32_t selected_color = stateColor(codex_selected_agent_);
-  canvas_.fillRoundRect(12, 59, 296, 63, 17, color565(kCodexPanel));
-  canvas_.fillRoundRect(22, 64, 64, 53, 15, color565(0x292D42));
-  canvas_.drawRoundRect(22, 64, 64, 53, 15, color565(selected_color));
-  // A tiny original Stack-chan face keeps the control surface expressive.
-  const int face_center_x = 57;
-  const uint16_t face_ink = color565(kCodexText);
-  if (selected_state == CodexAgentState::complete) {
-    canvas_.drawLine(42, 84, 48, 87, face_ink);
-    canvas_.drawLine(66, 87, 72, 84, face_ink);
-    canvas_.drawLine(47, 99, 56, 104, face_ink);
-    canvas_.drawLine(56, 104, 67, 98, face_ink);
-  } else if (selected_state == CodexAgentState::error) {
-    canvas_.fillCircle(46, 85, 2, face_ink);
-    canvas_.fillCircle(68, 85, 2, face_ink);
-    canvas_.drawLine(48, 104, 57, 99, face_ink);
-    canvas_.drawLine(57, 99, 66, 104, face_ink);
-  } else if (selected_state == CodexAgentState::needs_input) {
-    canvas_.fillCircle(46, 85, 2, face_ink);
-    canvas_.fillCircle(68, 85, 2, face_ink);
-    canvas_.setTextColor(color565(selected_color));
-    canvas_.setTextSize(2);
-    canvas_.drawString("?", face_center_x, 99);
-    canvas_.setTextSize(1);
-  } else {
-    const int blink_offset = selected_state == CodexAgentState::working
-                                 ? static_cast<int>((now_ms / 300) % 2)
-                                 : 0;
-    canvas_.fillCircle(46, 85 + blink_offset, 2, face_ink);
-    canvas_.fillCircle(68, 85 - blink_offset, 2, face_ink);
-    canvas_.drawLine(51, 99, 63, 99, face_ink);
+  // Bottom-left heartbeat: one phase advances every 300 ms. The full 900 ms
+  // cycle is measured above, so missed frames are observable rather than
+  // merely decorative.
+  key(10, 28, 164, 58, 62, 0x15161D, 0x282A33);
+  const int heartbeat_phase = static_cast<int>((now_ms % kCodexHeartbeatPeriodMs) /
+                                                (kCodexHeartbeatPeriodMs / 3));
+  constexpr uint32_t heartbeat_colors[3] = {0xA9C9FF, 0xD8D590, 0x8E92A2};
+  for (int index = 0; index < 3; ++index) {
+    canvas_.fillCircle(37, 183 + index * 7, index == heartbeat_phase ? 3 : 2,
+                       color565(heartbeat_colors[index]));
   }
-  // The selected slot and its live state are enough context on this tiny
-  // display. Keep the center panel free of chat titles and secondary controls.
-  canvas_.setTextDatum(textdatum_t::middle_left);
-  canvas_.setTextColor(color565(kCodexText));
-  canvas_.setTextSize(2);
-  canvas_.drawString(codexAgentStateName(selected_state), 100, 90);
-  canvas_.setTextSize(1);
-  canvas_.setTextDatum(textdatum_t::middle_center);
+  canvas_.fillCircle(61, 195, 15, color565(0x111219));
 
-  const bool approval = selected_state == CodexAgentState::needs_input;
-  if (approval) {
-    canvas_.fillRoundRect(8, 130, 148, 102, 17, color565(0x521B2B));
-    canvas_.fillRoundRect(164, 130, 148, 102, 17, color565(0x12452C));
-    const uint16_t decline_ink = color565(0xFF9AB2);
-    const uint16_t approve_ink = color565(0x73FF9E);
-    canvas_.drawCircle(82, 181, 20, decline_ink);
-    canvas_.drawLine(72, 171, 92, 191, decline_ink);
-    canvas_.drawLine(92, 171, 72, 191, decline_ink);
-    canvas_.drawCircle(238, 181, 20, approve_ink);
-    canvas_.drawLine(226, 181, 235, 190, approve_ink);
-    canvas_.drawLine(235, 190, 252, 171, approve_ink);
-  } else {
-    // Five compact icon keys keep utility actions available without spending
-    // scarce pixels on labels. The wide mic below remains the clear primary
-    // action, matching the physical hierarchy of a dedicated controller.
-    for (int index = 0; index < 5; ++index) {
-      const int x = 8 + index * 62;
-      uint32_t fill = kCodexPanel;
-      uint32_t icon = kCodexText;
-      if (index == 3 && codex_archive_armed_) {
-        fill = 0x543716;
-        icon = 0xFFD38A;
-      }
-      const bool steer_ready = index == 4 && codex_queued_followup_ &&
-                               selected_state == CodexAgentState::working;
-      if (index == 4 && steer_ready) {
-        fill = 0x233B63;
-        icon = 0x9CC7FF;
-      } else if (index == 4) {
-        fill = 0x191B26;
-        icon = 0x5E6375;
-      }
-      canvas_.fillRoundRect(x, 128, 56, 48, 14, color565(fill));
-      canvas_.drawRoundRect(x, 128, 56, 48, 14, color565(0x303446));
-      canvas_.setTextColor(color565(icon));
-      const uint16_t ink = color565(kCodexText);
-      if (index == 0) {
-        canvas_.drawBitmap(x + 14, 138, codex_icons::lightning_28, 28, 28, ink);
-      } else if (index == 1) {
-        canvas_.drawBitmap(x + 14, 138, codex_icons::chat_circle_dots_28, 28,
-                           28, ink);
-      } else if (index == 2) {
-        canvas_.drawBitmap(x + 14, 138, codex_icons::git_fork_28, 28, 28, ink);
-      } else if (index == 3) {
-        canvas_.drawBitmap(x + 14, 138, codex_icons::archive_28, 28, 28,
-                           color565(icon));
-      } else {
-        const uint16_t steer_ink = color565(icon);
-        canvas_.drawBitmap(x + 14, 138, codex_icons::arrow_bend_up_right_28,
-                           28, 28, steer_ink);
-        if (steer_ready) canvas_.fillCircle(x + 43, 166, 3, steer_ink);
-      }
-    }
-
-    uint32_t mic_color = 0x39253E;
-    uint32_t mic_text = kCodexAccent;
-    if (codex_voice_state_ == CodexVoiceState::recording) {
-      mic_color = 0x5A1734;
-      mic_text = 0xFFABC7;
-    } else if (codex_voice_state_ == CodexVoiceState::processing) {
-      mic_color = 0x29334D;
-      mic_text = 0xB9C8FF;
-    } else if (codex_voice_state_ == CodexVoiceState::completed) {
-      mic_color = 0x174531;
-      mic_text = 0x8BFFBC;
-    }
-    canvas_.fillRoundRect(8, 184, 304, 48, 15, color565(mic_color));
-    canvas_.drawRoundRect(8, 184, 304, 48, 15, color565(0x593B60));
-    canvas_.setTextColor(color565(mic_text));
-    const uint16_t mic_ink = color565(mic_text);
-    canvas_.drawBitmap(142, 189, codex_icons::microphone_36, 36, 36, mic_ink);
-    if (codex_voice_state_ == CodexVoiceState::processing) {
-      const int active_dot = static_cast<int>((now_ms / 220) % 3);
-      for (int dot = 0; dot < 3; ++dot) {
-        canvas_.fillCircle(185 + dot * 7, 208, 2,
-                           color565(dot == active_dot ? 0xFFFFFF : 0x586383));
-      }
-    } else if (codex_voice_state_ == CodexVoiceState::recording) {
-      canvas_.drawCircle(160, 207, 20 + static_cast<int>((now_ms / 180) % 3),
-                         mic_ink);
-    }
+  uint32_t mic_fill = 0x181920;
+  uint32_t mic_border = 0x373944;
+  uint32_t mic_color = 0xF7F4EE;
+  if (codex_voice_state_ == CodexVoiceState::recording) {
+    mic_fill = 0x53223A;
+    mic_border = 0x8A3D60;
+    mic_color = 0xFFB3CA;
+  } else if (codex_voice_state_ == CodexVoiceState::processing) {
+    mic_fill = 0x273152;
+    mic_border = 0x485B92;
+    mic_color = 0xC5D1FF;
+  } else if (codex_voice_state_ == CodexVoiceState::completed) {
+    mic_fill = 0x1B4734;
+    mic_border = 0x347A59;
+    mic_color = 0xA1F6C4;
   }
+  key(11, 94, 164, 124, 62, mic_fill, mic_border);
+  canvas_.drawBitmap(138, 177, codex_icons::microphone_36, 36, 36,
+                     color565(mic_color));
+  if (codex_voice_state_ == CodexVoiceState::recording) {
+    canvas_.drawCircle(156, 195, 21 + static_cast<int>((now_ms / 180) % 2),
+                       color565(mic_color));
+  }
+
+  key(12, 226, 164, 58, 62, codex_archive_armed_ ? 0x543716 : 0x181920,
+      codex_archive_armed_ ? 0x8A6229 : 0x343640);
+  canvas_.drawBitmap(241, 181, codex_icons::archive_28, 28, 28,
+                     color565(codex_archive_armed_ ? 0xFFD38A : kCodexText));
+
   canvas_.pushSprite(0, 0);
 }
 

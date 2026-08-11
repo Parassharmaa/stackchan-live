@@ -68,6 +68,7 @@ bool reported_playback_active = false;
 uint32_t last_energy_ms = 0;
 uint32_t last_audio_telemetry_ms = 0;
 uint32_t last_head_sensor_telemetry_ms = 0;
+uint32_t last_codex_heartbeat_telemetry_ms = 0;
 uint32_t last_playback_ended_ms = 0;
 uint32_t last_motion_ended_ms = 0;
 uint32_t boot_count = 0;
@@ -1101,6 +1102,27 @@ void exitCodexMode() {
   lights.set(255, 105, 145, 0.08f, stackchan::LightAnimation::solid);
 }
 
+int8_t codexControlAt(int x, int y) {
+  constexpr int slot_x[6] = {94, 160, 28, 94, 160, 226};
+  constexpr int slot_y[6] = {16, 16, 64, 64, 64, 64};
+  for (int8_t index = 0; index < 6; ++index) {
+    if (x >= slot_x[index] && x < slot_x[index] + 58 &&
+        y >= slot_y[index] && y < slot_y[index] + 42) return index;
+  }
+  if (y >= 112 && y < 158) {
+    constexpr int column_x[4] = {28, 94, 160, 226};
+    for (int8_t index = 0; index < 4; ++index) {
+      if (x >= column_x[index] && x < column_x[index] + 58) return 6 + index;
+    }
+  }
+  if (y >= 164 && y < 226) {
+    if (x >= 28 && x < 86) return 10;
+    if (x >= 94 && x < 218) return 11;
+    if (x >= 226 && x < 284) return 12;
+  }
+  return -1;
+}
+
 void handleTouch(uint32_t now_ms) {
   const auto& detail = M5.Touch.getDetail(0);
   if (face.settingsMode()) {
@@ -1126,7 +1148,9 @@ void handleTouch(uint32_t now_ms) {
   }
   if (face.codexMode()) {
     const auto state = codex.agent(codex.selectedAgent()).state();
-    const bool mic_region = detail.y >= 181 &&
+    const int8_t pressed_control = codexControlAt(detail.x, detail.y);
+    if (detail.wasPressed()) face.setCodexPressedControl(pressed_control);
+    const bool mic_region = pressed_control == 11 &&
                             state != stackchan::CodexAgentState::needs_input;
     if (!codex_mic_pressed && detail.wasPressed() && mic_region) {
       // Clear every existing local cue before dictation so the laptop receives
@@ -1141,6 +1165,7 @@ void handleTouch(uint32_t now_ms) {
       return;
     }
     if (codex_mic_pressed && detail.wasReleased()) {
+      face.setCodexPressedControl(-1);
       codex.setMicPressed(false);
       codex_mic_pressed = false;
       codex_submit_pending = true;
@@ -1156,6 +1181,7 @@ void handleTouch(uint32_t now_ms) {
       abs(detail.distanceX()) * 2 > abs(detail.distanceY()) * 3) {
     Serial.printf("codex-ui: swipe dx=%d dy=%d mode=%d\n", detail.distanceX(),
                   detail.distanceY(), face.codexMode());
+    face.setCodexPressedControl(-1);
     if (!face.codexMode() && detail.distanceX() < 0) {
       enterCodexMode();
       return;
@@ -1187,11 +1213,13 @@ void handleTouch(uint32_t now_ms) {
   if (tap_route == stackchan::ScreenTapRoute::codex_control) {
     Serial.printf("codex-ui: control release x=%d y=%d dx=%d dy=%d\n", x, y,
                   detail.distanceX(), detail.distanceY());
+    const int8_t control = codexControlAt(x, y);
+    face.setCodexPressedControl(-1);
     // Codex is a dedicated control surface. Voice playback and a preceding UI
     // cue must never reinterpret its buttons as conversation interruption.
     // This also lets the user switch away from a speaking/working session.
-    if (y <= 56) {
-      const int agent = constrain(x / 50, 0, 5);
+    if (control >= 0 && control < 6) {
+      const int agent = control;
       // Paint selection immediately; host activation emits its compatible
       // double press afterward and must not delay physical feedback.
       face.setCodexSelectedAgent(static_cast<uint8_t>(agent));
@@ -1208,35 +1236,36 @@ void handleTouch(uint32_t now_ms) {
       last_codex_motion_state = codex.agent(agent).state();
       return;
     }
-    if (y >= 126) {
+    if (control >= 6) {
       const auto state = codex.agent(codex.selectedAgent()).state();
       if (state == stackchan::CodexAgentState::needs_input) {
-        const bool decline = x < 160;
+        if (control != 7 && control != 8) return;
+        const bool decline = control == 8;
         const bool sent = decline ? codex.decline() : codex.approve();
         audio.playUiSound(sent ? (decline ? stackchan::UiSoundEffect::decline
                                          : stackchan::UiSoundEffect::approve)
                                : stackchan::UiSoundEffect::error);
       } else {
-        const int command = y < 180 ? constrain(x / 62, 0, 4) : 5;
+        const int command = control;
         bool sent = false;
         auto effect = stackchan::UiSoundEffect::error;
-        if (command != 3) {
+        if (command != 12) {
           codex_archive_armed_until_ms = 0;
           face.setCodexArchiveArmed(false);
         }
-        if (command == 0) {
+        if (command == 6) {
           sent = codex.toggleFastMode();
           effect = stackchan::UiSoundEffect::fast;
         }
-        if (command == 1) {
+        if (command == 7) {
           sent = codex.startNewChat();
           effect = stackchan::UiSoundEffect::assistant;
         }
-        if (command == 2) {
+        if (command == 8) {
           sent = codex.continueInNewChat();
           effect = stackchan::UiSoundEffect::assistant;
         }
-        if (command == 3) {
+        if (command == 12) {
           if (codex_archive_armed_until_ms != 0 &&
               now_ms < codex_archive_armed_until_ms) {
             sent = codex.archiveThread();
@@ -1250,7 +1279,7 @@ void handleTouch(uint32_t now_ms) {
             effect = stackchan::UiSoundEffect::agent_select;
           }
         }
-        if (command == 4) {
+        if (command == 9) {
           if (!codex_queued_followup ||
               state != stackchan::CodexAgentState::working) {
             return;
@@ -1262,7 +1291,8 @@ void handleTouch(uint32_t now_ms) {
           }
           effect = stackchan::UiSoundEffect::fast;
         }
-        if (command != 5) {
+        if (command == 6 || command == 7 || command == 8 || command == 9 ||
+            command == 12) {
           audio.playUiSound(sent ? effect : stackchan::UiSoundEffect::error);
         }
         // The microphone is handled as a true press/release above.
@@ -1577,6 +1607,25 @@ void loop() {
     face.setSpeechEnergy(0.0f);
   }
   audio.captureFrame();
+  if (server_connected && face.codexMode() &&
+      now_ms - last_codex_heartbeat_telemetry_ms >= 5000) {
+    last_codex_heartbeat_telemetry_ms = now_ms;
+    JsonDocument heartbeat;
+    heartbeat["type"] = "telemetry";
+    heartbeat["payload"]["component"] = "codex_ui_heartbeat";
+    heartbeat["payload"]["target_interval_ms"] = 900;
+    heartbeat["payload"]["observed_interval_ms"] =
+        face.codexHeartbeatIntervalMs();
+    heartbeat["payload"]["drift_ms"] = face.codexHeartbeatDriftMs();
+    heartbeat["payload"]["missed_cycles"] = face.codexHeartbeatMisses();
+    heartbeat["payload"]["ticks"] = face.codexHeartbeatTicks();
+    heartbeat["payload"]["healthy"] =
+        face.codexHeartbeatIntervalMs() == 0 ||
+        (face.codexHeartbeatDriftMs() <= 80 && face.codexHeartbeatMisses() == 0);
+    String output;
+    serializeJson(heartbeat, output);
+    socket_client.sendTXT(output);
+  }
   if (server_connected && now_ms - last_audio_telemetry_ms >= 1000) {
     last_audio_telemetry_ms = now_ms;
     JsonDocument telemetry;

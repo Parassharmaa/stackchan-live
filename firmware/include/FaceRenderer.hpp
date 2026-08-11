@@ -43,14 +43,20 @@ class FaceRenderer {
   void setCodexVoiceState(CodexVoiceState state) { codex_voice_state_ = state; }
   void setCodexArchiveArmed(bool armed) { codex_archive_armed_ = armed; }
   void setCodexQueuedFollowup(bool queued) { codex_queued_followup_ = queued; }
+  void setCodexPressedControl(int8_t control) { codex_pressed_control_ = control; }
   void update(uint32_t now_ms);
   bool speakingFramesCached() const { return speaking_frames_cached_; }
   uint32_t speakingMouthTransitions() const { return speaking_mouth_transitions_; }
   uint32_t speakingBlinks() const { return speaking_blinks_; }
+  uint32_t codexHeartbeatTicks() const { return codex_heartbeat_ticks_; }
+  uint16_t codexHeartbeatIntervalMs() const { return codex_heartbeat_interval_ms_; }
+  uint16_t codexHeartbeatDriftMs() const { return codex_heartbeat_drift_ms_; }
+  uint16_t codexHeartbeatMisses() const { return codex_heartbeat_misses_; }
 
  private:
   void draw(uint32_t now_ms);
   void drawCodex(uint32_t now_ms);
+  void drawCodexReference(uint32_t now_ms);
   void drawSettings();
   void drawFaceHud(uint32_t now_ms);
   void renderAsset(int index, const uint8_t* data, size_t length);
@@ -94,6 +100,13 @@ class FaceRenderer {
   CodexVoiceState codex_voice_state_ = CodexVoiceState::idle;
   bool codex_archive_armed_ = false;
   bool codex_queued_followup_ = false;
+  int8_t codex_pressed_control_ = -1;
+  uint32_t codex_heartbeat_cycle_ = 0;
+  uint32_t codex_heartbeat_last_ms_ = 0;
+  uint32_t codex_heartbeat_ticks_ = 0;
+  uint16_t codex_heartbeat_interval_ms_ = 0;
+  uint16_t codex_heartbeat_drift_ms_ = 0;
+  uint16_t codex_heartbeat_misses_ = 0;
 };
 
 FaceState faceStateFromString(const String& value);
