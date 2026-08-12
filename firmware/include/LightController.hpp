@@ -28,11 +28,17 @@ class LightController {
   static constexpr uint8_t kLedConfigRegister = 0x24;
   static constexpr uint8_t kLedRamRegister = 0x30;
   static constexpr uint8_t kI2cConfigRegister = 0x23;
+  static constexpr uint8_t kGpioModeHighRegister = 0x04;
+  static constexpr uint8_t kGpioPullUpHighRegister = 0x0A;
+  static constexpr uint8_t kGpioPullDownHighRegister = 0x0C;
+  static constexpr uint8_t kGpioDriveHighRegister = 0x14;
+  static constexpr uint8_t kLedDataPinMask = 1 << (13 - 8);
   static constexpr uint8_t kLedCount = 12;
   static constexpr uint32_t kBusFrequency = 100000;
   static constexpr uint32_t kFrameIntervalMs = 40;
 
   bool writeFrame(const uint16_t (&colors)[kLedCount]);
+  bool configureDataPin();
   static uint16_t rgb565(uint8_t red, uint8_t green, uint8_t blue);
   static uint16_t wheel(uint8_t position, float brightness);
 

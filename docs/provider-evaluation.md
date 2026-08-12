@@ -11,8 +11,8 @@ The production default is the bilingual cascade with laptop-local speech:
   higher-confidence transcript;
 - GPT-5.6 Luna through Eve's Codex-subscription Responses transport with
   reasoning disabled for the latency baseline;
-- five-step Supertonic with the F5 voice for the current higher-intelligibility
-  bilingual profile.
+- five-step Supertonic with the brighter F4 voice for the current youthful,
+  higher-intelligibility bilingual character voice.
 
 It is the baseline lane for English, Japanese, device tools, and durable memory
 on this 36 GB M3 Pro Mac. It is not offline: finalized transcripts and selected

@@ -240,10 +240,10 @@ class Settings(BaseSettings):
     supertonic_cli: Path = PROJECT_ROOT / ".pixi/envs/default/bin/supertonic"
     supertonic_host: str = "127.0.0.1"
     supertonic_port: int = 7788
-    # F5 tied F1 on English and reached perfect Japanese round-trip recognition
-    # in the local voice sweep while rendering faster across both languages.
-    supertonic_voice: str = "F5"
+    # F4 is the brightest youthful built-in voice (about 262 Hz median F0 in
+    # English) while retaining strong bilingual round-trip intelligibility.
+    supertonic_voice: str = "F4"
     supertonic_steps: int = 5
-    supertonic_speed: float = 1.08
+    supertonic_speed: float = 1.10
     tts_voice_en: str = "Samantha"
     tts_voice_ja: str = "Kyoko"

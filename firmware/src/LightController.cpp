@@ -14,21 +14,97 @@ uint8_t scale(uint8_t value, float brightness) {
 }  // namespace
 
 bool LightController::begin() {
-  if (M5.In_I2C.scanID(kAddressLow, kBusFrequency)) {
-    address_ = kAddressLow;
-  } else if (M5.In_I2C.scanID(kAddressHigh, kBusFrequency)) {
-    address_ = kAddressHigh;
-  } else {
+  // The PY32 expander can boot after the CoreS3. Match the official BSP's
+  // bounded retry instead of permanently disabling lights after one miss.
+  const uint32_t deadline = millis() + 1400;
+  do {
+    if (M5.In_I2C.scanID(kAddressLow, kBusFrequency)) {
+      address_ = kAddressLow;
+      present_ = true;
+      break;
+    }
+    if (M5.In_I2C.scanID(kAddressHigh, kBusFrequency)) {
+      address_ = kAddressHigh;
+      present_ = true;
+      break;
+    }
+    delay(100);
+  } while (millis() < deadline);
+  if (!present_) {
     Serial.println("lights: M5IOE1 missing");
     return false;
   }
-  present_ = true;
   const uint8_t awake = 0;
-  M5.In_I2C.writeRegister(address_, kI2cConfigRegister, &awake, 1, kBusFrequency);
+  if (!M5.In_I2C.writeRegister(address_, kI2cConfigRegister, &awake, 1,
+                               kBusFrequency) ||
+      !configureDataPin()) {
+    present_ = false;
+    Serial.println("lights: RGB data pin configuration failed");
+    return false;
+  }
+  const uint8_t led_count = kLedCount;
+  if (!M5.In_I2C.writeRegister(address_, kLedConfigRegister, &led_count, 1,
+                               kBusFrequency)) {
+    present_ = false;
+    Serial.println("lights: LED count configuration failed");
+    return false;
+  }
+  delay(200);
   off();
-  update(millis());
+  if (!last_write_successful_) {
+    present_ = false;
+    Serial.println("lights: initial blank frame failed");
+    return false;
+  }
   Serial.printf("lights: ready address=0x%02X count=%u\n", address_, kLedCount);
   return true;
+}
+
+bool LightController::configureDataPin() {
+  uint8_t mode = 0;
+  uint8_t pull_up = 0;
+  uint8_t pull_down = 0;
+  uint8_t drive = 0;
+  if (!M5.In_I2C.readRegister(address_, kGpioModeHighRegister, &mode, 1,
+                              kBusFrequency) ||
+      !M5.In_I2C.readRegister(address_, kGpioPullUpHighRegister, &pull_up, 1,
+                              kBusFrequency) ||
+      !M5.In_I2C.readRegister(address_, kGpioPullDownHighRegister, &pull_down, 1,
+                              kBusFrequency) ||
+      !M5.In_I2C.readRegister(address_, kGpioDriveHighRegister, &drive, 1,
+                              kBusFrequency)) {
+    return false;
+  }
+  mode |= kLedDataPinMask;
+  pull_up |= kLedDataPinMask;
+  pull_down &= ~kLedDataPinMask;
+  drive &= ~kLedDataPinMask;
+  if (!M5.In_I2C.writeRegister(address_, kGpioModeHighRegister, &mode, 1,
+                               kBusFrequency) ||
+      !M5.In_I2C.writeRegister(address_, kGpioPullUpHighRegister, &pull_up, 1,
+                               kBusFrequency) ||
+      !M5.In_I2C.writeRegister(address_, kGpioPullDownHighRegister, &pull_down, 1,
+                               kBusFrequency) ||
+      !M5.In_I2C.writeRegister(address_, kGpioDriveHighRegister, &drive, 1,
+                               kBusFrequency)) {
+    return false;
+  }
+  uint8_t verified_mode = 0;
+  uint8_t verified_pull_up = 0;
+  uint8_t verified_pull_down = 0;
+  uint8_t verified_drive = 0;
+  return M5.In_I2C.readRegister(address_, kGpioModeHighRegister, &verified_mode,
+                                1, kBusFrequency) &&
+         M5.In_I2C.readRegister(address_, kGpioPullUpHighRegister,
+                                &verified_pull_up, 1, kBusFrequency) &&
+         M5.In_I2C.readRegister(address_, kGpioPullDownHighRegister,
+                                &verified_pull_down, 1, kBusFrequency) &&
+         M5.In_I2C.readRegister(address_, kGpioDriveHighRegister,
+                                &verified_drive, 1, kBusFrequency) &&
+         (verified_mode & kLedDataPinMask) != 0 &&
+         (verified_pull_up & kLedDataPinMask) != 0 &&
+         (verified_pull_down & kLedDataPinMask) == 0 &&
+         (verified_drive & kLedDataPinMask) == 0;
 }
 
 bool LightController::set(uint8_t red, uint8_t green, uint8_t blue, float brightness,

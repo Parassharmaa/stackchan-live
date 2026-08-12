@@ -78,6 +78,7 @@ uint32_t head_interrupt_contact_started_ms = 0;
 bool head_interrupt_latched = false;
 uint32_t approval_waiting_until_ms = 0;
 bool held_face_active = false;
+bool held_lights_active = false;
 bool codex_mic_pressed = false;
 bool codex_submit_pending = false;
 bool codex_queued_followup = false;
@@ -89,6 +90,11 @@ stackchan::CodexAgentState last_codex_motion_state =
 String held_face_state = "idle";
 String held_face_emotion = "neutral";
 float held_face_intensity = 0.5f;
+uint8_t held_light_red = 0;
+uint8_t held_light_green = 0;
+uint8_t held_light_blue = 0;
+float held_light_brightness = 0.0f;
+stackchan::LightAnimation held_light_animation = stackchan::LightAnimation::solid;
 String language_mode = "auto";
 
 constexpr uint32_t kHeadSensorPlaybackGuardMs = 500;
@@ -97,6 +103,14 @@ constexpr uint8_t kHeadSensorRearmSamples = 8;
 constexpr uint32_t kHeadInterruptHoldMs = 700;
 
 void clearHeldFace() { held_face_active = false; }
+
+void clearHeldLights() { held_lights_active = false; }
+
+void applyHeldLights() {
+  if (!held_lights_active) return;
+  lights.set(held_light_red, held_light_green, held_light_blue,
+             held_light_brightness, held_light_animation);
+}
 
 void applyHeldFace() {
   if (!held_face_active) return;
@@ -758,6 +772,10 @@ void handleControl(const uint8_t* payload, size_t length) {
   } else if (type == "session.state") {
     const String state = body["state"] | "idle";
     if (state == "thinking" || state == "listening") clearHeldFace();
+    // A user-requested light scene belongs to the completed turn. Keep it
+    // visible while Stack-chan replies and remains idle, then release it when
+    // the user deliberately starts the next turn.
+    if (state == "listening") clearHeldLights();
     if (state == "idle" || state == "thinking") {
       approval_waiting_until_ms = 0;
     }
@@ -772,13 +790,21 @@ void handleControl(const uint8_t* payload, size_t length) {
     } else if (state == "thinking") {
       lights.set(145, 60, 255, 0.24f, stackchan::LightAnimation::chase);
     } else if (state == "speaking") {
-      lights.set(50, 110, 255, 0.18f, stackchan::LightAnimation::pulse);
+      if (held_lights_active) {
+        applyHeldLights();
+      } else {
+        lights.set(50, 110, 255, 0.18f, stackchan::LightAnimation::pulse);
+      }
     } else if (state == "awaiting_approval") {
       face.setState(stackchan::FaceState::listening);
       face.setStatus("Approve or deny");
       lights.set(255, 150, 20, 0.24f, stackchan::LightAnimation::pulse);
     } else if (state == "idle") {
-      lights.set(255, 105, 145, 0.08f, stackchan::LightAnimation::solid);
+      if (held_lights_active) {
+        applyHeldLights();
+      } else {
+        lights.set(255, 105, 145, 0.08f, stackchan::LightAnimation::solid);
+      }
       if (!audio.playbackActive()) applyHeldFace();
     }
   } else if (type == "approval.requested") {
@@ -810,6 +836,15 @@ void handleControl(const uint8_t* payload, size_t length) {
     const bool written = lights.set(
         red, green, blue, brightness,
         stackchan::lightAnimationFromString(animation.c_str()));
+    if (written) {
+      held_lights_active = true;
+      held_light_red = red;
+      held_light_green = green;
+      held_light_blue = blue;
+      held_light_brightness = brightness;
+      held_light_animation =
+          stackchan::lightAnimationFromString(animation.c_str());
+    }
     sendLightResult(red, green, blue, brightness, animation, written, request_id);
   } else if (type == "motion.set") {
     const JsonVariantConst yaw = body["yaw_deg"];
@@ -990,6 +1025,7 @@ void websocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       // disabled until the nonce challenge is accepted and hello.ack arrives.
       server_connected = false;
       clearHeldFace();
+      clearHeldLights();
       approval_waiting_until_ms = 0;
       pending_server_nonce = "";
       pending_device_nonce = "";
